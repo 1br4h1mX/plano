@@ -47,13 +47,19 @@ Inspired by the calm of Notion, the clarity of Todoist and the rhythm of Google 
 ## 🧱 Tech stack
 
 - **Frontend:** React 18 + Vite 5 + Tailwind CSS 3 + React Router + Recharts + date-fns
-- **Backend:** Node.js + Express (protects your LLM API key — it never ships to the browser)
-- **Storage:** localStorage (offline) + JSON-backed accounts on the Express server, behind one adapter (`src/lib/db.js`)
+- **Backend:** Node.js + Express (self-host) **or** Cloudflare Pages Functions + D1 (recommended for a public demo — free, no cold starts)
+- **Storage:** localStorage (offline) + accounts on either the Express JSON store or Cloudflare D1, behind one adapter (`src/lib/db.js`)
 - **AI:** Anthropic Claude or OpenAI, selected via `LLM_PROVIDER` (or bring-your-own key in Settings)
 
 ```
 plano/
 ├─ .github/workflows/deploy.yml   GitHub Actions: build + GitHub Pages deploy
+├─ .github/workflows/deploy-cloudflare.yml  build + D1 migrate + Pages deploy
+├─ wrangler.toml                  Cloudflare Pages + D1 config
+├─ migrations/                    0001_init.sql (users/sessions/data tables)
+├─ functions/
+│  ├─ api/[[path]].js             the account API on Pages Functions
+│  └─ lib/store-d1.js             D1 store (scrypt hashing, session tokens)
 ├─ index.html                     SPA entry
 ├─ package.json
 ├─ vite.config.js                 dev proxy /api → :3001, relative base
@@ -113,6 +119,34 @@ Open http://localhost:3001.
 
 ### 5. Accounts
 The Express server stores accounts under `server/data/` (gitignored). Sign up in **Settings → Account** and your data syncs across devices signed into the same account. On a static-only host (GitHub Pages demo) the account form shows a "backend unreachable" message and Plano keeps working in the browser alone.
+
+---
+
+## ⚡ Cloudflare deployment (recommended: accounts for everyone)
+
+One free Cloudflare Pages project serves **both** the app and the API (Pages Functions + D1), so friends can sign up at your live URL — no local PC, no other host. There is no cold-start delay (unlike Render's free tier).
+
+**One-time setup (in the repo, with wrangler installed):**
+```bash
+npm install                # includes wrangler (dev dependency)
+npx wrangler login         # opens a browser to authorize your Cloudflare account
+npx wrangler d1 create plano          # note the returned database_id
+# paste that id into wrangler.toml → [[d1_databases]] → database_id
+npx wrangler d1 migrations apply plano
+npx wrangler deploy        # Creates plano.pages.dev and uploads SPA + functions
+```
+Your demo is now `https://plano.pages.dev` — sign up in **Settings → Account** and share the link.
+
+**Local development against the Cloudflare stack:**
+```bash
+npm run build
+npx wrangler d1 migrations apply plano --local   # seeds .wrangler/state D1
+npx wrangler pages dev dist --port 8788          # SPA + functions on :8788
+```
+
+**Automatic deploys from GitHub:** add two repo secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and `.github/workflows/deploy-cloudflare.yml` builds, runs D1 migrations and deploys on every push to `main`. The old GitHub Pages workflow still runs too — it now points its `/api` calls at `https://plano.pages.dev`, so the `github.io` link works as well.
+
+The Express server in `server/` remains fully supported (`npm run build && npm start`) for self-hosting on a VPS where you control the data directly.
 
 ---
 
@@ -190,7 +224,6 @@ Please keep the storage layer swapped behind `src/lib/db.js` and never add an AI
 ## 🗺️ Roadmap suggestions
 
 - Session persistence, password reset emails, and rate limiting on auth
-- Cloud sync via Supabase or a hosted DB (swap `src/lib/db.js`)
 - Recurring task auto-completion & reminders (Service Worker + push)
 - Calendar integrations (Google/Apple ICS export, CalDAV)
 - Multi-goal "project" views with Gantt-style planning

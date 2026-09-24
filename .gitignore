@@ -13,6 +13,9 @@ dist-ssr/
 # Backend account data (users, sessions, per-account snapshots)
 server/data/
 
+# Cloudflare local state
+.wrangler/
+
 # Logs
 logs/
 *.log
