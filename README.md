@@ -135,6 +135,7 @@ npx wrangler d1 create plano-app    # note the returned database_id
 npx wrangler d1 migrations apply plano-app
 npx wrangler deploy        # Creates plano-app.pages.dev and uploads SPA + functions
 ```
+(Or run the whole thing in one step after login: `npm run cf:setup` — it creates the D1 database, pins the id in `wrangler.toml`, applies migrations and deploys.)
 Your demo is now `https://plano-app.pages.dev` — sign up in **Settings → Account** and share the link.
 
 **Local development against the Cloudflare stack:**
