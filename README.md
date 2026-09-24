@@ -130,21 +130,21 @@ One free Cloudflare Pages project serves **both** the app and the API (Pages Fun
 ```bash
 npm install                # includes wrangler (dev dependency)
 npx wrangler login         # opens a browser to authorize your Cloudflare account
-npx wrangler d1 create plano          # note the returned database_id
+npx wrangler d1 create plano-app    # note the returned database_id
 # paste that id into wrangler.toml → [[d1_databases]] → database_id
-npx wrangler d1 migrations apply plano
-npx wrangler deploy        # Creates plano.pages.dev and uploads SPA + functions
+npx wrangler d1 migrations apply plano-app
+npx wrangler deploy        # Creates plano-app.pages.dev and uploads SPA + functions
 ```
-Your demo is now `https://plano.pages.dev` — sign up in **Settings → Account** and share the link.
+Your demo is now `https://plano-app.pages.dev` — sign up in **Settings → Account** and share the link.
 
 **Local development against the Cloudflare stack:**
 ```bash
 npm run build
-npx wrangler d1 migrations apply plano --local   # seeds .wrangler/state D1
+npx wrangler d1 migrations apply plano-app --local   # seeds .wrangler/state D1
 npx wrangler pages dev dist --port 8788          # SPA + functions on :8788
 ```
 
-**Automatic deploys from GitHub:** add two repo secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and `.github/workflows/deploy-cloudflare.yml` builds, runs D1 migrations and deploys on every push to `main`. The old GitHub Pages workflow still runs too — it now points its `/api` calls at `https://plano.pages.dev`, so the `github.io` link works as well.
+**Automatic deploys from GitHub:** add two repo secrets (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`) and `.github/workflows/deploy-cloudflare.yml` builds, runs D1 migrations and deploys on every push to `main`. The old GitHub Pages workflow still runs too — it now points its `/api` calls at `https://plano-app.pages.dev`, so the `github.io` link works as well.
 
 The Express server in `server/` remains fully supported (`npm run build && npm start`) for self-hosting on a VPS where you control the data directly.
 

@@ -27,7 +27,7 @@ jobs:
         env:
           # GitHub Pages is static; point its /api/* calls at the Cloudflare
           # backend so this copy also gets working accounts + synced data.
-          VITE_API_BASE: https://plano.pages.dev
+          VITE_API_BASE: https://plano-app.pages.dev
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
