@@ -21,6 +21,7 @@ const ENERGY = [
 ];
 
 const PROVIDERS = [
+  { value: 'gemini', label: 'Google Gemini' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
 ];
@@ -79,7 +80,7 @@ export default function Settings() {
 
   const removeKey = () => {
     clearAIConfig();
-    setAiForm({ provider: 'anthropic', apiKey: '', model: '' });
+    setAiForm({ provider: 'gemini', apiKey: '', model: '' });
     setAiStatus('Key removed — the built-in engine is active.');
   };
 
@@ -168,7 +169,7 @@ export default function Settings() {
               AI power — bring your own key
             </h2>
             <p className="text-xs text-faint mt-0.5">
-              Optional. Paste your own Anthropic or OpenAI key and the assistant runs on your LLM of choice. Calls go straight from your browser to the provider.
+              Optional. Connect a free Google Gemini key (no card needed) — or use Anthropic/OpenAI. Calls go straight from your browser to the provider.
             </p>
           </div>
           {aiForm.apiKey && (
@@ -193,7 +194,11 @@ export default function Settings() {
             <input
               id="ai-model"
               className="input"
-              placeholder={aiForm.provider === 'openai' ? 'gpt-4o-mini' : 'claude-sonnet-4-20250514'}
+              placeholder={
+                aiForm.provider === 'openai' ? 'gpt-4o-mini'
+                  : aiForm.provider === 'gemini' ? 'gemini-2.5-flash'
+                    : 'claude-sonnet-4-20250514'
+              }
               value={aiForm.model}
               onChange={(e) => setAiForm((f) => ({ ...f, model: e.target.value }))}
             />
@@ -207,7 +212,11 @@ export default function Settings() {
               id="ai-key"
               className="input flex-1 font-mono"
               type={showKey ? 'text' : 'password'}
-              placeholder={aiForm.provider === 'openai' ? 'sk-…' : 'sk-ant-…'}
+              placeholder={
+                aiForm.provider === 'gemini' ? 'AIza…'
+                  : aiForm.provider === 'openai' ? 'sk-…'
+                    : 'sk-ant-…'
+              }
               value={aiForm.apiKey}
               onChange={(e) => setAiForm((f) => ({ ...f, apiKey: e.target.value }))}
               autoComplete="off"
@@ -244,6 +253,15 @@ export default function Settings() {
         <p className="mt-3 text-xs text-faint">
           Your key is stored only in this browser and sent only to {providerLabel(aiForm.provider)}. If it fails, the built-in engine takes over automatically.
         </p>
+        {aiForm.provider === 'gemini' && (
+          <p className="mt-2 text-xs">
+            No key yet?{' '}
+            <a className="text-brand font-semibold hover:underline" href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              Get a free Google Gemini API key
+            </a>{' '}
+            — no credit card required.
+          </p>
+        )}
       </section>
 
       {/* Notifications */}

@@ -7,7 +7,7 @@
 
 const STORAGE_KEY = 'plano:ai:v1';
 
-const DEFAULTS = { provider: 'anthropic', apiKey: '', model: '' };
+const DEFAULTS = { provider: 'gemini', apiKey: '', model: '' };
 
 export function getAIConfig() {
   try {
@@ -46,5 +46,7 @@ export function clearAIConfig() {
 }
 
 export function providerLabel(provider) {
-  return provider === 'openai' ? 'OpenAI' : 'Anthropic';
+  if (provider === 'openai') return 'OpenAI';
+  if (provider === 'gemini') return 'Google Gemini';
+  return 'Anthropic';
 }

@@ -7,6 +7,14 @@
 const DEFAULT_MODELS = {
   anthropic: 'claude-sonnet-4-20250514',
   openai: 'gpt-4o-mini',
+  gemini: 'gemini-2.5-flash',
+};
+
+// Gemini and OpenRouter expose the same wire format as OpenAI's chat endpoint,
+// so they share one code path — the key just goes to a different base URL.
+const OPENAI_COMPAT_ENDPOINTS = {
+  openai: 'https://api.openai.com/v1/chat/completions',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
 };
 
 /**
@@ -15,9 +23,10 @@ const DEFAULT_MODELS = {
  */
 export async function clientComplete({ provider, apiKey, model, system, user, maxTokens = 3000 }) {
   if (!apiKey) throw new Error('No API key provided');
-  const resolvedModel = model || DEFAULT_MODELS[provider] || DEFAULT_MODELS.openai;
-  if (provider === 'anthropic') return completeAnthropic(apiKey, resolvedModel, { system, user, maxTokens });
-  return completeOpenAI(apiKey, resolvedModel, { system, user, maxTokens });
+  const p = provider === 'anthropic' ? 'anthropic' : OPENAI_COMPAT_ENDPOINTS[provider] ? provider : 'openai';
+  const resolvedModel = model || DEFAULT_MODELS[p] || DEFAULT_MODELS.openai;
+  if (p === 'anthropic') return completeAnthropic(apiKey, resolvedModel, { system, user, maxTokens });
+  return completeOpenAI(apiKey, resolvedModel, { system, user, maxTokens, baseUrl: OPENAI_COMPAT_ENDPOINTS[p] });
 }
 
 /** Cheap ping used by the "Test connection" button in Settings. */
@@ -53,8 +62,9 @@ async function completeAnthropic(key, model, { system, user, maxTokens }) {
   return data.content.map((c) => c.text || '').join('');
 }
 
-async function completeOpenAI(key, model, { system, user, maxTokens }) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+async function completeOpenAI(key, model, { system, user, maxTokens, baseUrl = OPENAI_COMPAT_ENDPOINTS.openai }) {
+  const label = baseUrl.includes('generativelanguage') ? 'Google Gemini' : 'OpenAI';
+  const res = await fetch(baseUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({
@@ -66,7 +76,7 @@ async function completeOpenAI(key, model, { system, user, maxTokens }) {
       ],
     }),
   });
-  if (!res.ok) throw new Error(`${providerLabel('openai')} API ${res.status}: ${await safeText(res)}`);
+  if (!res.ok) throw new Error(`${label} API ${res.status}: ${await safeText(res)}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '';
 }
