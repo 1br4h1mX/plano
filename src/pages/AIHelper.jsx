@@ -163,7 +163,7 @@ export default function AIHelper() {
           </h1>
           <p className="mt-1 text-sm text-sub">
             {aiReady === false
-              ? 'Running on the built-in engine — add an API key in server/.env for the full LLM experience.'
+              ? 'Running on the built-in engine — fully on-device, no backend needed. Connect a server + LLM key for the extended experience.'
               : aiReady
                 ? 'Connected to your LLM provider. Ask anything about your week.'
                 : 'Checking assistant status…'}
