@@ -8,7 +8,7 @@ on:
 # The one-time local setup (run with wrangler logged in) creates the D1 db:
 #   npx wrangler d1 create plano-app   # paste returned id into wrangler.toml
 #   npx wrangler d1 migrations apply plano-app
-#   npx wrangler deploy
+#   npx wrangler pages deploy dist
 # After that, every push deploys automatically from here. Requires repo
 # secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
 jobs:
@@ -47,4 +47,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+          command: pages deploy dist --project-name plano-app

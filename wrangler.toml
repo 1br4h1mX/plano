@@ -7,14 +7,13 @@ compatibility_flags = ["nodejs_compat"]
 
 # site/bindings for Pages Functions during `wrangler pages dev` / deploy
 pages_build_output_dir = "dist"
-build = { command = "npm run build" }
 
 # One D1 database holds users, sessions and per-account snapshots.
 # 1) `wrangler d1 create plano-app`  -> paste its id as database_id below.
 # 2) `wrangler d1 migrations apply plano-app`
-# 3) `wrangler deploy`
+# 3) `npx wrangler pages deploy dist` (or: npm run cf:setup)
 [[d1_databases]]
 binding = "PLANO_DB"
 database_name = "plano-app"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "d213a285-16cb-4bd6-ae60-329b6cd751ec"
 migrations_dir = "migrations"

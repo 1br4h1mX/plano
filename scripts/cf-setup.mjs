@@ -35,22 +35,29 @@ try {
   process.exit(1);
 }
 
-let databaseId = placeholder;
-try {
-  const info = JSON.parse(runCapture("npx", ["wrangler", "d1", "info", dbName, "--json"]));
-  databaseId = info?.result?.database_id || info?.database_id || "";
-  if (!databaseId) throw new Error("no id");
-  console.log(`✓ D1 database "${dbName}" already exists (${databaseId})`);
-} catch {
-  if (!hasZeroId) {
-    console.error(`✗ D1 database "${dbName}" not found, but wrangler.toml holds a custom id — check the id.`);
+let databaseId = "";
+if (!hasZeroId) {
+  databaseId = placeholder;
+  console.log(`✓ Using configured database_id (${placeholder})`);
+} else {
+  try {
+    const rows = JSON.parse(runCapture("npx", ["wrangler", "d1", "list", "--json"]) || "[]");
+    const row = rows.find((r) => r.name === dbName);
+    if (row?.uuid) databaseId = row.uuid;
+    if (databaseId) console.log(`✓ D1 database "${dbName}" already exists (${databaseId})`);
+  } catch {
+    /* list not available yet — fall through to create */
+  }
+}
+if (!databaseId) {
+  console.log(`→ Creating D1 database "${dbName}"…`);
+  const out = runCapture("npx", ["wrangler", "d1", "create", dbName]);
+  const m = out.match(/database_id\s*=\s*"([0-9a-f-]{36})"/i);
+  databaseId = m ? m[1] : "";
+  if (!databaseId) {
+    console.error(`✗ Could not parse database_id from "d1 create" output.`);
     process.exit(1);
   }
-  console.log(`→ Creating D1 database "${dbName}"…`);
-  run("npx", ["wrangler", "d1", "create", dbName]);
-  const info = JSON.parse(runCapture("npx", ["wrangler", "d1", "info", dbName, "--json"]));
-  databaseId = info?.result?.database_id || info?.database_id || "";
-  if (!databaseId) throw new Error("create returned no id");
 }
 if (!/^[0-9a-f-]{36}$/i.test(databaseId)) {
   console.error(`✗ Unrecognized database_id returned: "${databaseId}"`);
@@ -66,10 +73,17 @@ run("npx", ["wrangler", "d1", "migrations", "apply", dbName, "--remote"]);
 run("npm", ["run", "build"]);
 
 try {
-  run("npx", ["wrangler", "pages", "project", "create", project, "--production-branch", "main"]);
+run("npx", ["wrangler", "pages", "project", "create", project, "--production-branch", "main"]);
 } catch {
-  console.log(`→ Pages project "${project}" already exists, deploying to it.`);
+    console.log(`→ Pages project "${project}" already exists, deploying to it.`);
 }
-run("npx", ["wrangler", "deploy"]);
-
-console.log(`\nLive: https://${project}.pages.dev`);
+run("npx", ["wrangler", "pages", "deploy", "dist"]);
+let host = `${project}.pages.dev`;
+try {
+  const list = runCapture("npx", ["wrangler", "pages", "deployment", "list", "--project-name", project, "--json"]);
+  const subs = [...list.matchAll(/https:\/\/(?:[0-9a-f]{6,}\.)?([a-z0-9-]+\.pages\.dev)/g)].map((m) => m[1]);
+  if (subs[0]) host = subs[0];
+} catch {
+  /* fall back to the plain project name */
+}
+console.log(`\nLive: https://${host}`);
