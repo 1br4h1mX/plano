@@ -2,6 +2,12 @@
 
 **Plan your perfect day. Reach every goal.**
 
+> 🚀 **Try the live demo:** [**plano.1br4h1mX.github.io**](https://1br4h1mX.github.io/plano/) — no sign-up, works in your browser.
+>
+> <p>
+> <img alt="Live demo" src="https://img.shields.io/badge/Live%20demo-1br4h1mX.github.io%2Fplano-6366f1?style=for-the-badge&logo=githubpages&logoColor=white&labelColor=111" />
+> </p>
+
 Plano is a production-quality time-management and productivity web app with a built-in **AI Planning Assistant**. It turns your goals, tasks, deadlines, working hours and energy profile into a balanced, realistic schedule — generated with one click and addable to your calendar with another.
 
 Inspired by the calm of Notion, the clarity of Todoist and the rhythm of Google Calendar. Fully responsive, WCAG-friendly, dark/light mode, and ready to grow from localStorage to a real database.
