@@ -9,6 +9,7 @@ import { createContext, useEffect, useMemo, useState, useCallback } from 'react'
 import { db } from '../lib/db.js';
 import { uid } from '../lib/ids.js';
 import { computeStats, goalProgress } from '../lib/stats.js';
+import * as remote from '../lib/remote.js';
 
 const AppContext = createContext(null);
 export default AppContext;
@@ -18,6 +19,7 @@ const systemDark = () => window.matchMedia?.('(prefers-color-scheme: dark)')?.ma
 export function AppProvider({ children }) {
   const [data, setData] = useState(null); // { settings, tasks, goals, sessions }
   const [ready, setReady] = useState(false);
+  const [user, setUser] = useState(null);
 
   // ---- initial load -----------------------------------------------------
   useEffect(() => {
@@ -25,6 +27,8 @@ export function AppProvider({ children }) {
       setData(snapshot);
       setReady(true);
     });
+    // Restore an existing account session (returns null when signed out).
+    remote.me().then((u) => setUser(u)).catch(() => setUser(null));
   }, []);
 
   // ---- persistence ------------------------------------------------------
@@ -43,6 +47,20 @@ export function AppProvider({ children }) {
 
   const setTheme = useCallback((theme) => {
     setData((d) => ({ ...d, settings: { ...d.settings, theme } }));
+  }, []);
+
+  // ---- account (backend) ------------------------------------------------
+  const connectAccount = useCallback(async (kind, form) => {
+    const account = kind === 'signup' ? await remote.signup(form) : await remote.login(form);
+    setUser(account);
+    const synced = await db.syncFromRemote();
+    if (synced.snapshot) setData(synced.snapshot);
+    return synced;
+  }, []);
+
+  const logout = useCallback(async () => {
+    await remote.logout();
+    setUser(null);
   }, []);
 
   // ---- task CRUD --------------------------------------------------------
@@ -188,6 +206,10 @@ export function AppProvider({ children }) {
     return {
       ready,
       data,
+      user,
+      login: (form) => connectAccount('login', form),
+      signup: (form) => connectAccount('signup', form),
+      logout,
       settings: data?.settings || {},
       tasks: data?.tasks || [],
       goals: data?.goals || [],
@@ -201,7 +223,8 @@ export function AppProvider({ children }) {
       addSession,
       updateSettings, setTheme, resetAll,
     };
-  }, [data, ready, addTask, updateTask, deleteTask, toggleTask, scheduleTask,
+  }, [data, ready, user, connectAccount, logout,
+    addTask, updateTask, deleteTask, toggleTask, scheduleTask,
     addGoal, updateGoal, deleteGoal, addMilestone, updateMilestone, deleteMilestone,
     addSession, updateSettings, setTheme, resetAll]);
 

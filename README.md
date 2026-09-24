@@ -25,8 +25,9 @@ Inspired by the calm of Notion, the clarity of Todoist and the rhythm of Google 
 | **Focus timer** | Pomodoro timer with configurable work/break lengths and break reminders (sounds + browser notifications). |
 | **Statistics** | Bar/area/pie charts of completed tasks, focus minutes, categories + day streaks. |
 | **Settings** | Dark/light/system theme, working hours, work days, energy profile, notifications, fixed commitments. |
+| **Accounts** | Sign up / log in with the built-in backend (scrypt-hashed passwords, session tokens) — your tasks, goals and settings sync across devices. |
 | **AI Assistant** ⭐ | Chat + **"Generate my perfect schedule"**, **"Fix my week"** rescheduling, motivational coaching, and a data-driven weekly review. |
-| **Storage** | localStorage today, behind a clean adapter (`src/lib/db.js`) so Supabase/Firebase plugs in later. |
+| **Storage** | `localStorage` by default; signed-in accounts sync to the backend behind one adapter (`src/lib/db.js`). |
 
 ### The AI Helper (special feature)
 
@@ -47,8 +48,8 @@ Inspired by the calm of Notion, the clarity of Todoist and the rhythm of Google 
 
 - **Frontend:** React 18 + Vite 5 + Tailwind CSS 3 + React Router + Recharts + date-fns
 - **Backend:** Node.js + Express (protects your LLM API key — it never ships to the browser)
-- **Storage:** localStorage via a swappable DB adapter (`src/lib/db.js`)
-- **AI:** Anthropic Claude or OpenAI, selected via `LLM_PROVIDER`
+- **Storage:** localStorage (offline) + JSON-backed accounts on the Express server, behind one adapter (`src/lib/db.js`)
+- **AI:** Anthropic Claude or OpenAI, selected via `LLM_PROVIDER` (or bring-your-own key in Settings)
 
 ```
 plano/
@@ -62,11 +63,12 @@ plano/
 │  ├─ llm.js                      provider abstraction + JSON extraction
 │  ├─ planner.js                  local scheduling engine + LLM validator
 │  ├─ prompts.js                  the AI system prompts
-│  └─ routes/ai.js                /api/ai/* endpoints w/ offline fallbacks
+│  ├─ lib/store.js                scrypt-hashed users, sessions, account data
+│  └─ routes/                     ai.js, auth.js (signup/login/me), data.js
 └─ src/
    ├─ main.jsx, App.jsx, index.css
-   ├─ lib/         db, api, stats, date utils, eisenhower, plannerInput
-   ├─ context/     AppContext (state, CRUD, theme, persistence)
+   ├─ lib/         db, remote, ai, stats, date utils, eisenhower, plannerInput
+   ├─ context/     AppContext (state, CRUD, theme, persistence, account)
    ├─ hooks/       useApp, useLocalStorage, useNow
    ├─ components/  ui, layout, tasks, calendar, ai, timer, stats
    └─ pages/       Landing, Dashboard, Tasks, Calendar, Goals, FocusTimer,
@@ -109,6 +111,9 @@ npm start       # Express serves the API AND the built app
 ```
 Open http://localhost:3001.
 
+### 5. Accounts
+The Express server stores accounts under `server/data/` (gitignored). Sign up in **Settings → Account** and your data syncs across devices signed into the same account. On a static-only host (GitHub Pages demo) the account form shows a "backend unreachable" message and Plano keeps working in the browser alone.
+
 ---
 
 ## 🔐 Environment variables
@@ -121,14 +126,15 @@ Open http://localhost:3001.
 | `OPENAI_API_KEY` | OpenAI key (server-side only) |
 | `OPENAI_MODEL` | default `gpt-4o-mini` |
 | `PORT` | Express port (default `3001`) |
+| `PLANO_DATA_DIR` | where account data is stored (default `server/data/`) |
 
 ---
 
 ## ☁️ Deployment
 
-Because the AI key is **server-side**, a fully-featured deployment needs a host that runs Node (Heroku, Railway, Render, Fly.io, a VPS — or Vercel's Node functions). Add your env vars there; the same `npm run build && npm start` works everywhere.
+Given the AI key and **accounts are server-side**, a fully-featured deployment needs a host that runs Node (Heroku, Railway, Render, Fly.io, a VPS — or Vercel's Node functions). Add your env vars there; the same `npm run build && npm start` works everywhere. Account data lives in the configured `PLANO_DATA_DIR` (persist it with a mounted volume on free-tier hosts).
 
-For a **static-only** demo (frontend without AI), deploy `dist/` (built with a relative base) to GitHub Pages, Netlify, or Vercel:
+For a **static-only** demo (frontend without AI or accounts), deploy `dist/` (built with a relative base) to GitHub Pages, Netlify, or Vercel:
 
 **GitHub Pages** — enable Pages → "GitHub Actions" in repo settings. The included workflow `.github/workflows/deploy.yml` builds and deploys on every push to `main`. (Hash-based routing means no rewrite rules are needed.)
 
@@ -183,7 +189,8 @@ Please keep the storage layer swapped behind `src/lib/db.js` and never add an AI
 
 ## 🗺️ Roadmap suggestions
 
-- Cloud sync via Supabase (swap `src/lib/db.js`)
+- Session persistence, password reset emails, and rate limiting on auth
+- Cloud sync via Supabase or a hosted DB (swap `src/lib/db.js`)
 - Recurring task auto-completion & reminders (Service Worker + push)
 - Calendar integrations (Google/Apple ICS export, CalDAV)
 - Multi-goal "project" views with Gantt-style planning

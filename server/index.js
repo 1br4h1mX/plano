@@ -5,6 +5,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import aiRoutes from './routes/ai.js';
+import authRoutes from './routes/auth.js';
+import dataRoutes from './routes/data.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -12,6 +14,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.disable('x-powered-by');
 
 // Health + capability check (the client uses this to know whether real AI is available).
 app.get('/api/health', (_req, res) => {
@@ -19,6 +22,8 @@ app.get('/api/health', (_req, res) => {
 });
 
 app.use('/api/ai', aiRoutes);
+app.use('/api/auth', authRoutes);
+app.use('/api/data', dataRoutes);
 
 // Production: serve the built SPA and fall back to index.html for client routing.
 const distPath = path.join(__dirname, '..', 'dist');

@@ -10,6 +10,9 @@ dist-ssr/
 .env.*
 !.env.example
 
+# Backend account data (users, sessions, per-account snapshots)
+server/data/
+
 # Logs
 logs/
 *.log

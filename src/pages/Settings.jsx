@@ -29,7 +29,7 @@ const PROVIDERS = [
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Mon-first
 
 export default function Settings() {
-  const { settings, updateSettings, resetAll, stats } = useApp();
+  const { settings, updateSettings, resetAll, stats, user, login, signup, logout } = useApp();
   const [commitment, setCommitment] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const [aiForm, setAiForm] = useState(() => {
@@ -39,6 +39,11 @@ export default function Settings() {
   const [showKey, setShowKey] = useState(false);
   const [aiStatus, setAiStatus] = useState('');
   const [testing, setTesting] = useState(false);
+  const [accountMode, setAccountMode] = useState('login');
+  const [accountForm, setAccountForm] = useState({ name: '', email: '', password: '', confirm: '' });
+  const [accountError, setAccountError] = useState('');
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountNote, setAccountNote] = useState('');
 
   const h = settings.workingHours || { start: '09:00', end: '18:00' };
   const workDays = settings.workDays || [1, 2, 3, 4, 5];
@@ -84,12 +89,166 @@ export default function Settings() {
     setAiStatus('Key removed — the built-in engine is active.');
   };
 
+  const submitAccount = async (e) => {
+    e.preventDefault();
+    setAccountError('');
+    setAccountNote('');
+    const f = accountForm;
+    if (!f.email.trim() || !f.password) return setAccountError('Enter your email and password.');
+    if (accountMode === 'signup') {
+      if (!f.name.trim()) return setAccountError('Enter your name.');
+      if (f.password.length < 8) return setAccountError('Password must be at least 8 characters.');
+      if (f.password !== f.confirm) return setAccountError('Passwords do not match.');
+    }
+    setAccountBusy(true);
+    try {
+      const synced = accountMode === 'signup' ? await signup(f) : await login(f);
+      setAccountNote(
+        synced.seeded
+          ? 'Account created — your current data was copied to the backend.'
+          : synced.remote
+            ? 'Logged in — your data was loaded from the backend.'
+            : 'Logged in — backend unreachable, using this browser\u2019s data.',
+      );
+    } catch (err) {
+      setAccountError(err.message);
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
+  const doLogout = async () => {
+    setAccountBusy(true);
+    try {
+      await logout();
+      setAccountForm({ name: '', email: '', password: '', confirm: '' });
+      setAccountNote('Logged out — your data is still safe in this browser.');
+    } finally {
+      setAccountBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-5 animate-fade-in max-w-3xl">
       <header>
         <h1 className="text-2xl font-extrabold tracking-tight text-ink">Settings</h1>
         <p className="mt-1 text-sm text-sub">Everything the planner needs to respect your real life.</p>
       </header>
+
+      {/* Account — sign up / log in with the backend */}
+      <section className="card p-5" id="account">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-sm font-bold text-ink">Account</h2>
+            <p className="text-xs text-faint mt-0.5">
+              Sign up to keep your tasks, goals and settings on the Plano backend — accessible from any device you log in on.
+            </p>
+          </div>
+          {user && <span className="chip bg-ok/10 text-ok shrink-0">Synced</span>}
+        </div>
+
+        {user ? (
+          <div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="h-10 w-10 shrink-0 rounded-full bg-brand text-white font-bold flex items-center justify-center">
+                  {(user.name || user.email || 'P')[0].toUpperCase()}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink truncate">{user.name || user.email}</p>
+                  <p className="text-xs text-faint truncate">{user.email}</p>
+                </div>
+              </div>
+              <button type="button" className="btn-outline btn-sm shrink-0" onClick={doLogout} disabled={accountBusy}>
+                Log out
+              </button>
+            </div>
+            {accountNote && <p className="mt-3 text-xs text-ok">{accountNote}</p>}
+          </div>
+        ) : (
+          <form onSubmit={submitAccount} className="space-y-3 max-w-md">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              {(['login', 'signup']).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => { setAccountMode(m); setAccountError(''); }}
+                  aria-pressed={accountMode === m}
+                  className={`rounded-lg px-3 py-1.5 transition-all cursor-pointer ${
+                    accountMode === m ? 'bg-brand text-white' : 'text-sub hover:text-ink'
+                  }`}
+                >
+                  {m === 'login' ? 'Log in' : 'Sign up'}
+                </button>
+              ))}
+            </div>
+
+            {accountMode === 'signup' && (
+              <div>
+                <label className="label" htmlFor="ac-name">Name</label>
+                <input
+                  id="ac-name"
+                  className="input"
+                  value={accountForm.name}
+                  onChange={(e) => setAccountForm((f) => ({ ...f, name: e.target.value }))}
+                  placeholder="Ada Lovelace"
+                  autoComplete="name"
+                />
+              </div>
+            )}
+            <div>
+              <label className="label" htmlFor="ac-email">Email</label>
+              <input
+                id="ac-email"
+                className="input"
+                type="email"
+                value={accountForm.email}
+                onChange={(e) => setAccountForm((f) => ({ ...f, email: e.target.value }))}
+                placeholder="you@example.com"
+                autoComplete="email"
+              />
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="label" htmlFor="ac-password">Password</label>
+                <input
+                  id="ac-password"
+                  className="input"
+                  type="password"
+                  value={accountForm.password}
+                  onChange={(e) => setAccountForm((f) => ({ ...f, password: e.target.value }))}
+                  autoComplete={accountMode === 'signup' ? 'new-password' : 'current-password'}
+                  placeholder={accountMode === 'signup' ? '8+ characters' : '••••••••'}
+                />
+              </div>
+              {accountMode === 'signup' && (
+                <div>
+                  <label className="label" htmlFor="ac-confirm">Confirm password</label>
+                  <input
+                    id="ac-confirm"
+                    className="input"
+                    type="password"
+                    value={accountForm.confirm}
+                    onChange={(e) => setAccountForm((f) => ({ ...f, confirm: e.target.value }))}
+                    autoComplete="new-password"
+                  />
+                </div>
+              )}
+            </div>
+
+            {accountError && <p className="text-xs text-danger">{accountError}</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="submit" className="btn-primary btn-sm" disabled={accountBusy}>
+                {accountBusy ? 'Working…' : accountMode === 'signup' ? 'Create account' : 'Log in'}
+              </button>
+              {accountNote && <span className="text-xs text-ok">{accountNote}</span>}
+            </div>
+            <p className="text-xs text-faint">
+              Passwords are hashed on the server (scrypt) and never stored in plain text. If the backend isn\u2019t reachable, Plano keeps working in this browser only.
+            </p>
+          </form>
+        )}
+      </section>
 
       {/* Appearance */}
       <section className="card p-5">
@@ -325,7 +484,7 @@ export default function Settings() {
       <section className="card p-5">
         <h2 className="text-sm font-bold text-ink mb-1">Data & storage</h2>
         <p className="text-sm text-sub mb-4">
-          Everything lives in your browser\u2019s localStorage — {stats?.totalTasks || 0} task(s), {stats?.totalCompleted || 0} completed, {stats?.sessionsCount || 0} focus session(s). The only external traffic is the AI requests you opt into: your own backend, or the provider you keyed above.
+          Your data lives in {user ? 'your account (and this browser)' : 'this browser'} — {stats?.totalTasks || 0} task(s), {stats?.totalCompleted || 0} completed, {stats?.sessionsCount || 0} focus session(s). The only external traffic is the AI requests you opt into, and the account sync above.
         </p>
         <button type="button" className="btn-danger" onClick={() => setConfirmReset(true)}>
           Reset all data

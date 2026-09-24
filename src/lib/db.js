@@ -7,6 +7,7 @@
  * swapping this module (the rest of the app never reads localStorage itself).
  */
 import { uid } from './ids.js';
+import { hasSession, loadData, saveData } from './remote.js';
 
 const STORAGE_KEY = 'plano:db:v1';
 
@@ -132,14 +133,96 @@ function persist() {
 /* ------------------------------------------------------------------ */
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
+/* -- remote (account) sync --------------------------------------------
+ * Mirrors the local snapshot to the account backend whenever a session
+ * exists AND the backend has proved reachable (`remoteActive`). A debounce
+ * keeps the push to a single write after bursts of edits (typing, drags).
+ * Any network failure flips the flag off so we never hammer an unreachable
+ * host; the next successful import (or login) turns it back on.          */
+let remoteActive = false;
+let pushTimer = null;
+let pushPending = null;
+
+/** Pulls the account snapshot if a session exists. Returns { remote, snapshot } where
+ *  snapshot is null if the account has no data yet; { remote:false } if unreachable. */
+async function importRemote() {
+  if (!hasSession()) return { remote: false };
+  try {
+    const snapshot = await loadData();
+    remoteActive = true;
+    return { remote: true, snapshot };
+  } catch (err) {
+    remoteActive = false;
+    if (err.offline) return { remote: false };
+    throw err;
+  }
+}
+
+/** Immediately uploads the current snapshot (used after login/signup to seed an empty account). */
+async function pushRemote() {
+  if (!hasSession() || !remoteActive) return false;
+  try {
+    return await saveData(clone(cache));
+  } catch (err) {
+    remoteActive = false;
+    if (!err.offline) throw err;
+    return false;
+  }
+}
+
+function schedulePush() {
+  if (!hasSession() || !remoteActive || cache === null) return;
+  pushPending = clone(cache);
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(async () => {
+    if (!pushPending || !pushTimer) return;
+    const payload = pushPending;
+    pushPending = null;
+    try {
+      await saveData(payload);
+    } catch (err) {
+      remoteActive = false;
+      if (!err.offline) console.error('Plano sync failed:', err);
+    }
+  }, 1200);
+}
+
 export const db = {
   async snapshot() {
+    try {
+      const pulled = await importRemote();
+      if (pulled.remote && pulled.snapshot) {
+        cache = clone(pulled.snapshot);
+        persist();
+        return clone(cache);
+      }
+    } catch {
+      /* any remote trouble -> fall through to local copy; never block boot */
+      remoteActive = false;
+    }
     return clone(load());
   },
 
   async persist(snapshot) {
     cache = clone(snapshot);
     persist();
+    schedulePush();
+  },
+
+  /** Used right after login/signup: adopt the remote copy, or seed it with local data. */
+  async syncFromRemote() {
+    const pulled = await importRemote();
+    if (pulled.remote && pulled.snapshot) return { remote: true, snapshot: clone(pulled.snapshot), seeded: false };
+    if (pulled.remote && !pulled.snapshot) {
+      await pushRemote();
+      return { remote: true, snapshot: clone(load()), seeded: true };
+    }
+    return { remote: false, snapshot: clone(load()), seeded: false };
+  },
+
+  /** Forced immediate upload (log out / manual export). */
+  async pushNow() {
+    return pushRemote();
   },
 
   // Quick accessors (used rarely; most reads go through the React context).
@@ -155,6 +238,7 @@ export const db = {
   async resetAll() {
     cache = seed();
     persist();
+    pushRemote();
     return clone(cache);
   },
 };
