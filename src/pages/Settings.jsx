@@ -5,6 +5,8 @@ import SegmentedControl from '../components/ui/SegmentedControl.jsx';
 import Toggle from '../components/ui/Toggle.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import { DAY_NAMES } from '../lib/dateUtils.js';
+import { getAIConfig, saveAIConfig, clearAIConfig, providerLabel } from '../lib/aiConfig.js';
+import { testConnection } from '../lib/llm.js';
 
 const THEMES = [
   { value: 'light', label: 'Light' },
@@ -18,12 +20,24 @@ const ENERGY = [
   { value: 'balanced', label: 'Balanced', icon: 'zap' },
 ];
 
+const PROVIDERS = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai', label: 'OpenAI' },
+];
+
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Mon-first
 
 export default function Settings() {
   const { settings, updateSettings, resetAll, stats } = useApp();
   const [commitment, setCommitment] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [aiForm, setAiForm] = useState(() => {
+    const c = getAIConfig();
+    return { provider: c.provider, apiKey: c.apiKey, model: c.model };
+  });
+  const [showKey, setShowKey] = useState(false);
+  const [aiStatus, setAiStatus] = useState('');
+  const [testing, setTesting] = useState(false);
 
   const h = settings.workingHours || { start: '09:00', end: '18:00' };
   const workDays = settings.workDays || [1, 2, 3, 4, 5];
@@ -40,6 +54,33 @@ export default function Settings() {
   };
   const removeCommitment = (id) => {
     updateSettings({ commitments: (settings.commitments || []).filter((c) => c.id !== id) });
+  };
+
+  const saveKey = () => {
+    if (!aiForm.apiKey.trim()) return;
+    const c = saveAIConfig(aiForm);
+    setAiForm({ provider: c.provider, apiKey: c.apiKey, model: c.model });
+    setAiStatus(`Saved — requests now go straight to ${providerLabel(c.provider)} from your browser.`);
+  };
+
+  const testKey = async () => {
+    if (!aiForm.apiKey.trim()) return;
+    setTesting(true);
+    setAiStatus(`Testing connection to ${providerLabel(aiForm.provider)}…`);
+    try {
+      await testConnection(aiForm.provider, aiForm.apiKey.trim(), aiForm.model);
+      setAiStatus(`Connected — ${providerLabel(aiForm.provider)} accepted your key.`);
+    } catch (err) {
+      setAiStatus(`Connection failed: ${err.message}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const removeKey = () => {
+    clearAIConfig();
+    setAiForm({ provider: 'anthropic', apiKey: '', model: '' });
+    setAiStatus('Key removed — the built-in engine is active.');
   };
 
   return (
@@ -118,6 +159,93 @@ export default function Settings() {
         </div>
       </section>
 
+      {/* AI provider — bring your own key */}
+      <section className="card p-5" id="ai-provider">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-sm font-bold text-ink flex items-center gap-2">
+              <Icon name="sparkles" className="h-4 w-4 text-brand" />
+              AI power — bring your own key
+            </h2>
+            <p className="text-xs text-faint mt-0.5">
+              Optional. Paste your own Anthropic or OpenAI key and the assistant runs on your LLM of choice. Calls go straight from your browser to the provider.
+            </p>
+          </div>
+          {aiForm.apiKey && (
+            <button type="button" className="btn-ghost btn-sm !text-danger shrink-0" onClick={removeKey}>
+              <Icon name="trash" className="h-3.5 w-3.5" /> Remove key
+            </button>
+          )}
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <p className="label">Provider</p>
+            <SegmentedControl
+              ariaLabel="AI provider"
+              options={PROVIDERS}
+              value={aiForm.provider}
+              onChange={(v) => setAiForm((f) => ({ ...f, provider: v }))}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="ai-model">Model (optional)</label>
+            <input
+              id="ai-model"
+              className="input"
+              placeholder={aiForm.provider === 'openai' ? 'gpt-4o-mini' : 'claude-sonnet-4-20250514'}
+              value={aiForm.model}
+              onChange={(e) => setAiForm((f) => ({ ...f, model: e.target.value }))}
+            />
+          </div>
+        </div>
+
+        <div className="mt-3">
+          <label className="label" htmlFor="ai-key">API key</label>
+          <div className="flex gap-2">
+            <input
+              id="ai-key"
+              className="input flex-1 font-mono"
+              type={showKey ? 'text' : 'password'}
+              placeholder={aiForm.provider === 'openai' ? 'sk-…' : 'sk-ant-…'}
+              value={aiForm.apiKey}
+              onChange={(e) => setAiForm((f) => ({ ...f, apiKey: e.target.value }))}
+              autoComplete="off"
+              spellCheck="false"
+            />
+            <button
+              type="button"
+              className="btn-outline !px-3 shrink-0 text-xs font-semibold"
+              onClick={() => setShowKey((v) => !v)}
+              aria-label={showKey ? 'Hide API key' : 'Show API key'}
+            >
+              {showKey ? 'Hide' : 'Show'}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-primary btn-sm" onClick={saveKey} disabled={!aiForm.apiKey.trim()}>
+            Save key
+          </button>
+          <button type="button" className="btn-outline btn-sm" onClick={testKey} disabled={!aiForm.apiKey.trim() || testing}>
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          {getAIConfig().apiKey === aiForm.apiKey && aiForm.apiKey && (
+            <span className="chip bg-ok/10 text-ok">Active</span>
+          )}
+        </div>
+
+        {aiStatus && (
+          <p className={`mt-3 text-xs ${aiStatus.startsWith('Connected') || aiStatus.startsWith('Saved') ? 'text-ok' : 'text-danger'}`}>
+            {aiStatus}
+          </p>
+        )}
+        <p className="mt-3 text-xs text-faint">
+          Your key is stored only in this browser and sent only to {providerLabel(aiForm.provider)}. If it fails, the built-in engine takes over automatically.
+        </p>
+      </section>
+
       {/* Notifications */}
       <section className="card p-5">
         <h2 className="text-sm font-bold text-ink mb-4">Notifications</h2>
@@ -179,7 +307,7 @@ export default function Settings() {
       <section className="card p-5">
         <h2 className="text-sm font-bold text-ink mb-1">Data & storage</h2>
         <p className="text-sm text-sub mb-4">
-          Everything lives in your browser\u2019s localStorage — {stats?.totalTasks || 0} task(s), {stats?.totalCompleted || 0} completed, {stats?.sessionsCount || 0} focus session(s). Nothing is sent anywhere except AI requests to your own backend.
+          Everything lives in your browser\u2019s localStorage — {stats?.totalTasks || 0} task(s), {stats?.totalCompleted || 0} completed, {stats?.sessionsCount || 0} focus session(s). The only external traffic is the AI requests you opt into: your own backend, or the provider you keyed above.
         </p>
         <button type="button" className="btn-danger" onClick={() => setConfirmReset(true)}>
           Reset all data

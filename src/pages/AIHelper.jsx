@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useApp } from '../hooks/useApp.js';
-import { api } from '../lib/api.js';
+import { ai } from '../lib/aiClient.js';
+import { getAIConfig, providerLabel } from '../lib/aiConfig.js';
 import { buildPlannerInput, contextLines } from '../lib/plannerInput.js';
 import { Icon } from '../components/ui/Icons.jsx';
 import Modal from '../components/ui/Modal.jsx';
@@ -49,6 +51,8 @@ export default function AIHelper() {
   const [planSource, setPlanSource] = useState('llm');
   const [planBusy, setPlanBusy] = useState(false);
   const [aiReady, setAiReady] = useState(null);
+  const [ownKey, setOwnKey] = useState(() => Boolean(getAIConfig().apiKey));
+  const [ownKeyProvider, setOwnKeyProvider] = useState(() => getAIConfig().provider);
   const [review, setReview] = useState(null);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [fixDay, setFixDay] = useState(false);
@@ -57,7 +61,7 @@ export default function AIHelper() {
   const listRef = useRef(null);
 
   useEffect(() => {
-    api.aiHealth().then((r) => setAiReady(r.aiConfigured)).catch(() => setAiReady(false));
+    ai.aiHealth().then((r) => setAiReady(r.aiConfigured)).catch(() => setAiReady(false));
   }, []);
 
   useEffect(() => {
@@ -79,7 +83,7 @@ export default function AIHelper() {
     setBusy(true);
     try {
       const ctx = contextLines({ tasks, goals, settings, stats });
-      const { reply } = await api.chat(
+      const { reply } = await ai.chat(
         next.map(({ role, content }) => ({ role, content })),
         ctx,
       );
@@ -94,7 +98,7 @@ export default function AIHelper() {
   const generate = async () => {
     setPlanBusy(true);
     try {
-      const res = await api.generateSchedule(buildPlannerInput({ tasks, goals, settings, days: 7 }));
+      const res = await ai.generateSchedule(buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
       setPlanSource(res.source);
       setReview(null);
@@ -110,7 +114,7 @@ export default function AIHelper() {
     setFixDay(false);
     setPlanBusy(true);
     try {
-      const res = await api.reschedule(fixDate, buildPlannerInput({ tasks, goals, settings, days: 7 }));
+      const res = await ai.reschedule(fixDate, buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
       setPlanSource('local');
       setReview(null);
@@ -139,7 +143,7 @@ export default function AIHelper() {
   const runReview = async () => {
     setReviewBusy(true);
     try {
-      const res = await api.weeklyReview({
+      const res = await ai.weeklyReview({
         completedTasks: stats?.totalCompleted || 0,
         focusMinutes: stats?.focusMinutesTotal || 0,
         streaks: { current: stats?.currentStreak || 0, best: stats?.bestStreak || 0 },
@@ -165,11 +169,18 @@ export default function AIHelper() {
             AI Assistant
           </h1>
           <p className="mt-1 text-sm text-sub">
-            {aiReady === false
-              ? 'Running on the built-in engine — fully on-device, no backend needed. Connect a server + LLM key for the extended experience.'
-              : aiReady
-                ? 'Connected to your LLM provider. Ask anything about your week.'
-                : 'Checking assistant status…'}
+            {aiReady === false ? (
+              <>
+                Running on the built-in engine — fully on-device, no backend needed.{' '}
+                <Link to="/app/settings" className="text-brand font-semibold hover:underline">Add your own API key</Link> to upgrade.
+              </>
+            ) : aiReady ? (
+              ownKey
+                ? `Using your personal ${providerLabel(ownKeyProvider)} key — requests go straight from your browser to the provider.`
+                : 'Connected to your LLM provider. Ask anything about your week.'
+            ) : (
+              'Checking assistant status…'
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">

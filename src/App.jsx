@@ -21,6 +21,7 @@ export default function App() {
       ) : (
         <Routes>
           <Route path="/" element={<Landing />} />
+          <Route path="/ai" element={<Navigate to="/app/assistant" replace />} />
           <Route path="/app" element={<AppShell />}>
             <Route index element={<Navigate to="/app/dashboard" replace />} />
             <Route path="dashboard" element={<Dashboard />} />
