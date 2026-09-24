@@ -97,6 +97,7 @@ export default function AIHelper() {
       const res = await api.generateSchedule(buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
       setPlanSource(res.source);
+      setReview(null);
       if (res.warnings?.length) flash(res.warnings[0]);
     } catch (err) {
       flash(`Could not generate: ${err.message}`);
@@ -112,6 +113,7 @@ export default function AIHelper() {
       const res = await api.reschedule(fixDate, buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
       setPlanSource('local');
+      setReview(null);
       flash(`Rebuilt your week from ${shortLabel(fixDate)}.`);
     } catch (err) {
       flash(`Could not rebuild: ${err.message}`);
@@ -143,6 +145,7 @@ export default function AIHelper() {
         streaks: { current: stats?.currentStreak || 0, best: stats?.bestStreak || 0 },
         daysActive: stats?.activeDays || 0,
       });
+      setPlan(null);
       setReview(res.review);
     } catch (err) {
       setReview(`Review failed: ${err.message}`);
