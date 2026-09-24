@@ -7,7 +7,7 @@
 const DEFAULT_MODELS = {
   anthropic: 'claude-sonnet-4-20250514',
   openai: 'gpt-4o-mini',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.8-flash',
 };
 
 // Gemini and OpenRouter expose the same wire format as OpenAI's chat endpoint,
@@ -26,7 +26,7 @@ export async function clientComplete({ provider, apiKey, model, system, user, ma
   const p = provider === 'anthropic' ? 'anthropic' : OPENAI_COMPAT_ENDPOINTS[provider] ? provider : 'openai';
   const resolvedModel = model || DEFAULT_MODELS[p] || DEFAULT_MODELS.openai;
   if (p === 'anthropic') return completeAnthropic(apiKey, resolvedModel, { system, user, maxTokens });
-  return completeOpenAI(apiKey, resolvedModel, { system, user, maxTokens, baseUrl: OPENAI_COMPAT_ENDPOINTS[p] });
+  return completeOpenAI({ provider: p, key: apiKey, model: resolvedModel, system, user, maxTokens, baseUrl: OPENAI_COMPAT_ENDPOINTS[p] });
 }
 
 /** Cheap ping used by the "Test connection" button in Settings. */
@@ -62,7 +62,20 @@ async function completeAnthropic(key, model, { system, user, maxTokens }) {
   return data.content.map((c) => c.text || '').join('');
 }
 
-async function completeOpenAI(key, model, { system, user, maxTokens, baseUrl = OPENAI_COMPAT_ENDPOINTS.openai }) {
+async function completeOpenAI({ provider, key, model, system, user, maxTokens, baseUrl }) {
+  try {
+    return await callOpenAI(baseUrl, key, model, { system, user, maxTokens });
+  } catch (err) {
+    // Model retired/no longer available? Retry once with the provider default.
+    const defaultModel = DEFAULT_MODELS[provider];
+    if (defaultModel && defaultModel !== model && /(404|model|not found|could not found)/i.test(err.message)) {
+      return callOpenAI(baseUrl, key, defaultModel, { system, user, maxTokens });
+    }
+    throw err;
+  }
+}
+
+async function callOpenAI(baseUrl, key, model, { system, user, maxTokens }) {
   const label = baseUrl.includes('generativelanguage') ? 'Google Gemini' : 'OpenAI';
   const res = await fetch(baseUrl, {
     method: 'POST',

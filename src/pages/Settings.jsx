@@ -196,7 +196,7 @@ export default function Settings() {
               className="input"
               placeholder={
                 aiForm.provider === 'openai' ? 'gpt-4o-mini'
-                  : aiForm.provider === 'gemini' ? 'gemini-2.5-flash'
+                  : aiForm.provider === 'gemini' ? 'gemini-3.8-flash'
                     : 'claude-sonnet-4-20250514'
               }
               value={aiForm.model}
