@@ -166,7 +166,7 @@ export default function Statistics() {
         ) : (
           <ul className="divide-y divide-line">
             {[...sessions].reverse().slice(0, 8).map((s) => {
-              const t = tasksById.get(s.taskId);
+              const t = tasksById[s.taskId];
               return (
                 <li key={s.id} className="flex items-center gap-3 px-5 py-3">
                   <span className="h-8 w-8 rounded-lg bg-brand/10 text-brand grid place-items-center shrink-0">
