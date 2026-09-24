@@ -45,6 +45,10 @@ async function json(path, { method = 'GET', body, token } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || `Server error (${res.status}).`);
     err.status = res.status;
+    if (res.status === 404 || res.status === 405) {
+      err.offline = true;
+      err.message = 'No Plano backend on this host (static site) — your data stays in this browser.';
+    }
     throw err;
   }
   return data;
