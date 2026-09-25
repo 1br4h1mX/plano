@@ -63,12 +63,13 @@ export async function onRequest(context) {
     }
 
     if (path === '/api/ai/ops' && request.method === 'POST') {
-      const { query, tasks, settings } = await readBody(request);
+      const { query, tasks, settings, subject } = await readBody(request);
       const geminiKey = env.GEMINI_API_KEY;
       const openaiKey = !geminiKey ? env.OPENAI_API_KEY : null;
       if (!geminiKey && !openaiKey) return json({ error: 'No LLM configured.' }, 503);
 
-      const user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${String(query || '')}`;
+      let user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${String(query || '')}`;
+      if (subject) user += `\n\nCONTEXT: This continues a conversation. The task or activity the user was last talking about is "${subject}". Resolve pronouns ("it", "that", "this") against it.`;
       const raw = geminiKey
         ? await callGemini(geminiKey, env.GEMINI_MODEL, { system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 })
         : await callOpenAI(openaiKey, { system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 });

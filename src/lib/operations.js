@@ -121,15 +121,18 @@ export function findSlot({ tasks, settings, durationMinutes, preferred = null, s
   const duration = clampDuration(durationMinutes);
   const ws = toMin(settings?.workingHours?.start || '09:00');
   const we = toMin(settings?.workingHours?.end || '18:00');
-  const start = startDate || todayReference();
+  const start = startDate && startDate >= todayReference() ? startDate : todayReference();
 
   const deadline = before ? Math.max(before, start) : null;
   const last = deadline || addDays(start, windowDays - 1);
   const withinRange = (d) => d <= last;
   const defaultDays = Array.from({ length: windowDays }, (_, i) => addDays(start, i)).filter(withinRange);
 
-  let dateCandidates = preferred?.date
-    ? [preferred.date].filter(withinRange)
+  // A requested date in the past must never be honoured — fall back to "soon".
+  const pref = preferred && preferred.date >= start ? preferred : null;
+
+  let dateCandidates = pref?.date
+    ? [pref.date].filter(withinRange)
     : defaultDays;
   if (!dateCandidates.length) dateCandidates = defaultDays;
   const candidatesFor = (arr) =>
@@ -144,27 +147,27 @@ export function findSlot({ tasks, settings, durationMinutes, preferred = null, s
       .find(Boolean);
 
   // Exact requested window (time honoured unless it overlaps something).
-  if (preferred?.date && preferred.start !== undefined && preferred.end !== undefined) {
-    const busy = busyForDate(tasks, settings, preferred.date, excludeTaskIds);
-    const ps = Math.max(toMin(preferred.start), ws);
-    const pe = Math.min(toMin(preferred.end), we);
+  if (pref?.date && pref.start !== undefined && pref.end !== undefined) {
+    const busy = busyForDate(tasks, settings, pref.date, excludeTaskIds);
+    const ps = Math.max(toMin(pref.start), ws);
+    const pe = Math.min(toMin(pref.end), we);
     const fits = pe - ps >= duration && !busy.some(([s, e]) => overlaps(ps, pe, s, e));
-    if (fits) return { date: preferred.date, start: fromMin(ps), end: fromMin(ps + duration) };
+    if (fits) return { date: pref.date, start: fromMin(ps), end: fromMin(ps + duration) };
 
     // Busy -> prefer the first gap at/after the requested start, same day.
     const slots = freeSlots(ws, we, busy);
     for (const [s, e] of slots) {
       const st = Math.max(s, ps);
-      if (e - st >= duration) return { date: preferred.date, start: fromMin(st), end: fromMin(st + duration) };
+      if (e - st >= duration) return { date: pref.date, start: fromMin(st), end: fromMin(st + duration) };
     }
     // Otherwise the best-fitting gap before the requested start, same day.
     for (let i = slots.length - 1; i >= 0; i -= 1) {
       const [s, e] = slots[i];
-      if (Math.min(e, pe) - s >= duration) return { date: preferred.date, start: fromMin(s), end: fromMin(s + duration) };
+      if (Math.min(e, pe) - s >= duration) return { date: pref.date, start: fromMin(s), end: fromMin(s + duration) };
     }
 
     // Nothing that day -> try the following days (still subject to deadline).
-    const later = candidatesFor(defaultDays.filter((d) => d > preferred.date));
+    const later = candidatesFor(defaultDays.filter((d) => d > pref.date));
     if (later) return later;
   }
 
@@ -306,7 +309,18 @@ export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD })
       let status = 'ok';
       if (requested && (slot.start !== op.start || slot.end !== op.end)) {
         status = 'adjusted';
-        note = `Moved to ${hhmmTo12(slot.start)} \u2013 ${hhmmTo12(slot.end)} because your requested window was busy.`;
+        const wsInner = toMin(settings?.workingHours?.start || '09:00');
+        const weInner = toMin(settings?.workingHours?.end || '18:00');
+        const blocker = blockersOn(
+          list,
+          op.date || String(existing?.scheduledStart || '').slice(0, 10),
+          Math.max(toMin(op.start), wsInner),
+          Math.min(toMin(op.end), weInner),
+          exclude,
+        )[0];
+        note = blocker
+          ? `${hhmmTo12(op.start)} \u2013 ${hhmmTo12(op.end)} is taken by "${blocker.title}" \u2014 moved to ${hhmmTo12(slot.start)} \u2013 ${hhmmTo12(slot.end)}.`
+          : `Moved to ${hhmmTo12(slot.start)} \u2013 ${hhmmTo12(slot.end)} because your requested window was busy.`;
       } else if (!requested && !existing?.scheduledStart) {
         note = 'Found the first free slot.';
       }

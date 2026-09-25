@@ -88,7 +88,7 @@ export const api = {
   applyOps: async (input) => {
     const r = await tryRequest('/ai/ops', {
       method: 'POST',
-      body: JSON.stringify({ query: input?.query, tasks: input?.tasks, settings: input?.settings }),
+      body: JSON.stringify({ query: input?.query, tasks: input?.tasks, settings: input?.settings, subject: input?.subject }),
     });
     if (!r.ok) return null;
     return { text: r.body?.text || '', ops: r.body?.ops || [] };

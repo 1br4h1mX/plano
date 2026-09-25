@@ -60,6 +60,20 @@ const TYPE_LABEL = {
   focus: 'Focus',
 };
 
+/** Remembers the last task the user talked about, so follow-ups ("2 hours",
+    "move that to Friday") can resolve their pronouns. */
+function subjectFrom(ops, tasks) {
+  let subject = '';
+  (ops || []).forEach((op) => {
+    if (op.title) subject = op.title;
+    else if (op.taskId) {
+      const t = (tasks || []).find((x) => x.id === op.taskId);
+      if (t) subject = t.title;
+    }
+  });
+  return subject || null;
+}
+
 export default function AIHelper() {
   const { tasks, goals, settings, stats, scheduleTask, applyOps, restoreTasks } = useApp();
   const [messages, setMessages] = useLocalStorage('plano:chat', WELCOME);
@@ -79,6 +93,7 @@ export default function AIHelper() {
   const [fixDay, setFixDay] = useState(false);
   const [fixDate, setFixDate] = useState(todayISO());
   const [toast, setToast] = useState('');
+  const [subject, setSubject] = useLocalStorage('plano:topic', '');
   const listRef = useRef(null);
 
   useEffect(() => {
@@ -103,13 +118,15 @@ export default function AIHelper() {
     setInput('');
     setBusy(true);
     try {
-      const res = await ai.applyOps({ query: text, tasks, settings });
+      const res = await ai.applyOps({ query: text, tasks, settings, subject });
       let ops = [];
       if (res.ops?.length) {
         const resolved = resolveOps({ tasks, settings, ops: res.ops });
         ops = resolved.ops;
         setProposal({ text: res.text, ops: ops.filter((o) => o.status !== 'conflict'), conflicts: resolved.conflicts, status: 'pending' });
         setChoice({});
+        const topic = subjectFrom(ops, tasks);
+        if (topic) setSubject(topic);
       } else {
         setProposal(null);
       }

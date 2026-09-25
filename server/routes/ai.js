@@ -89,11 +89,12 @@ router.post('/chat', async (req, res, next) => {
 // deterministic operation layer still decides conflicts, slots and apply.
 router.post('/ops', async (req, res, next) => {
   try {
-    const { query, tasks, settings } = req.body || {};
+    const { query, tasks, settings, subject } = req.body || {};
     const cfg = config();
     if (!cfg) return res.status(503).json({ error: 'No LLM configured on the server.' });
 
-    const user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${query || ''}`;
+    let user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${query || ''}`;
+    if (subject) user += `\n\nCONTEXT: This continues a conversation. The task or activity the user was last talking about is "${subject}". Resolve pronouns ("it", "that", "this") against it.`;
     const raw = await complete({ system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 });
     const parsed = extractJson(raw);
     res.json({

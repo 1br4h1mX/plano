@@ -169,6 +169,7 @@ export const ai = {
         provider: cfg.provider,
         apiKey: cfg.apiKey,
         model: cfg.model,
+        subject: input?.subject,
       }),
     );
 

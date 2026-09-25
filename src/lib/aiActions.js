@@ -29,9 +29,10 @@ export { OPS_SYSTEM_PROMPT, scheduleSnapshot, normalizeOps };
  * Throws on network/parse failure so the caller can fall back to the parser.
  * NOTE: provider/model are filled in by aiClient.
  */
-export async function llmOps({ query, tasks, settings, provider, apiKey, model }) {
+export async function llmOps({ query, tasks, settings, provider, apiKey, model, subject }) {
   const snapshot = scheduleSnapshot({ tasks, settings });
-  const user = `SCHEDULE SNAPSHOT:\n${snapshot}\n\nUSER REQUEST: ${query}`;
+  let user = `SCHEDULE SNAPSHOT:\n${snapshot}\n\nUSER REQUEST: ${query}`;
+  if (subject) user += `\n\nCONTEXT: This continues a conversation. The task or activity the user was last talking about is "${subject}". Resolve pronouns ("it", "that", "this") against it.`;
   const raw = await clientComplete({
     provider,
     apiKey,
@@ -114,8 +115,25 @@ function parseTime(s) {
 const DUR_RE = /(?:for\s+|of\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/gi;
 const DUR_RE_CAP = /(?:for\s+|of\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/i;
 
+const WORD_DUR_RE =
+  /(an hour and a half|a couple of hours|half an hour|a half hour|an hour)/i;
+
 function extractDuration(lower) {
-  const m = lower.match(DUR_RE_CAP);
+  const w = (lower || '').match(WORD_DUR_RE);
+  if (w) {
+    const x = w[1].toLowerCase();
+    const min = x.startsWith('an hour and a half')
+      ? 90
+      : x.includes('half')
+        ? 30
+        : x.includes('couple')
+          ? 120
+          : x.includes('an hour')
+            ? 60
+            : 0;
+    return clampDuration(min);
+  }
+  const m = (lower || '').match(DUR_RE_CAP);
   if (!m) return null;
   const n = Number(m[1]);
   const unit = m[2];
@@ -169,16 +187,81 @@ function shortDateLabel(date) {
   return `${names[dt.getDay()]} ${months[dt.getMonth()]} ${d}`;
 }
 
+/* ---------- conversational follow-up support ---------- */
+
+const PURE_FRAGMENT_RE =
+  /^(just\s+|please\s+|ok\s+|yes\s+|yeah\s+|sure\s+)?(an hour and a half|a couple of hours|half an hour|a half hour|an hour|\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m))\s*[.,!?]*$/i;
+
+/** True when the message looks like a follow-up, not a fresh command. */
+function isFollowUp(lower) {
+  if (!lower || lower.length > 80) return false;
+  if (/\b(its?|their|it|that|this|them)\b/.test(lower)) return true;
+  if (PURE_FRAGMENT_RE.test(lower)) return true;
+  if (/^(at|@)\s*\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(lower)) return true;
+  if (/^(just\s+|please\s+)?(by|before|until|due)\s+.{1,24}$/.test(lower)) return true;
+  return false;
+}
+
+/**
+ * Turns a conversational fragment into a full command for the subject.
+ * Returns null when the fragment is too vague to rewrite; the caller then
+ * falls back to normal parsing (which will produce a friendly miss).
+ */
+function followUpCommand(lower, subject) {
+  const s = String(subject || '').trim();
+  if (!s) return null;
+
+  if (/\b(?:delete|remove|drop)\s+(?:the\s+)?(it|that|this|them)\b/.test(lower)) return `delete ${s}`;
+  if (/\b(?:cancel|skip|unschedule)\s+(?:the\s+)?(it|that|this|them)\b/.test(lower)) return `cancel ${s}`;
+
+  const mv = lower.match(/\b(?:move|shift|reschedule|push|put|schedule)\s+(?:the\s+)?(it|that|this|them)\s+to\s+(.+)/i);
+  if (mv) {
+    const target = (mv[2] || mv[1]).trim();
+    return `move ${s} to ${target}`;
+  }
+
+  if (/(?:deadline|due\s+date)\b[^]*?(?:to|until|on|by)\s+(.+)/i.test(lower)) {
+    const m = lower.match(/(?:deadline|due\s+date)\b[^]*?(?:to|until|on|by)\s+(.+)/i);
+    if (m) return `set the deadline of ${s} to ${m[1].trim()}`;
+  }
+  const by = lower.match(/^(?:just\s+|please\s+)?(?:by|before|until|due)\s+(.+)$/i);
+  if (by) return `set the deadline of ${s} to ${by[1].trim()}`;
+  if (/^(just\s+|please\s+)?(?:earlier|later|some\s+other\s+(?:time|day)|a\s+different\s+(?:time|day)|somewhere\s+else|more\s+afternoon|in\s+the\s+(?:morning|evening|afternoon))\s*[.,!?]*$/i.test(lower)) {
+    return `move ${s} to my next free slot`;
+  }
+
+  const at = lower.match(/(?:at|@)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+  if (at) return `schedule ${s} at ${at[1].trim()}`;
+
+  const mdur = lower.match(/(?:make\s+(?:it|that|this|them)\s+)?(an hour and a half|a couple of hours|half an hour|a half hour|an hour|\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m))/i);
+  if (mdur) {
+    const min = extractDuration(mdur[1]);
+    // "add X minutes of <subject>": resizes when it exists, adds when it doesn't.
+    if (min) return `add ${min} minutes of ${s}`;
+  }
+
+  return null;
+}
+
 /**
  * Deterministic intent parser. Returns { text, ops } where ops are raw ops
  * (to be resolved by operations.resolveOps) or [] when it was a question.
  */
-export function offlineOps(query, { tasks = [], settings = {} }) {
+export function offlineOps(query, { tasks = [], settings = {}, subject = null }) {
   const original = String(query || '').trim();
   const lower = original.toLowerCase();
   const ops = [];
   const text = (lit) => ({ text: lit, ops });
   const miss = () => text(localContextText(original, { tasks, settings }));
+
+  // ---- conversational follow-up -------------------------------------
+  // "Add Python tomorrow." -> "2 hours." / "make it 90 minutes" /
+  // "move that to Friday" / "actually delete it". Resolves pronouns and
+  // bare fragments against the last task the user talked about.
+  if (subject && isFollowUp(lower)) {
+    const rewritten = followUpCommand(lower, subject);
+    if (rewritten) return offlineOps(rewritten, { tasks, settings });
+  }
 
   // ---- priority -----------------------------------------------------
   const prio = lower.match(/(?:make|set|change|mark)\s+(?:the\s+)?["']?([^"']+?)["']?\s+(urgent|top|highest|high|medium\s*low|medium|normal|low)\s+priority/);
@@ -209,7 +292,7 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
   }
 
   // ---- delete -------------------------------------------------------
-  const del = lower.match(/\b(?:delete|drop)\s+(?:the\s+)?["']?([^"']+?)["']?\s*$/);
+  const del = lower.match(/\b(?:delete|drop)\s+(?:the\s+|my\s+|our\s+)?["']?([^"']+?)["']?\s*(?:for\s+)?(?:today|tomorrow|tonight|this|next|last)?\s*$/);
   if (del) {
     const task = findTask(tasks, null, del[1]);
     if (task) ops.push({ op: 'delete', taskId: task.id });
@@ -351,6 +434,19 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
       });
     if (ops.length) return text(`I\u2019ll fit those around your ${topic} before their deadlines.`);
     return miss();
+  }
+
+  // ---- deadline change ---------------------------------------------
+  const ddl =
+    lower.match(/(?:set|move|change|push|extend|update)\s+(?:the\s+)?deadline(?:\s+of)?\s+(?:the\s+)?["']?([^"']+?)["']?\s+(?:to|until)\s+(.+)$/) ||
+    lower.match(/(?:set|move|change|push|extend|update)\s+["']?([^"']+?)["']?\s+(?:deadline|due\s+date)\s+(?:to|until|on)\s+(.+)$/) ||
+    lower.match(/(?:make)\s+["']?([^"']+?)["']?\s+due\s+(?:on|by)\s+(.+)$/);
+  if (ddl) {
+    const task = findTask(tasks, null, ddl[1]);
+    const when = ddl[2].toLowerCase();
+    const deadline = resolveDeadline(when) || resolveDate(when);
+    if (task && deadline) ops.push({ op: 'deadline', taskId: task.id, deadline });
+    return ops.length ? text(`I\u2019ll set that deadline${deadline ? ` (${shortDateLabel(deadline)})` : ''}.`) : miss();
   }
 
   // ---- create / schedule -------------------------------------------
