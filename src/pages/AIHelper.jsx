@@ -69,6 +69,7 @@ export default function AIHelper() {
   const [planSource, setPlanSource] = useState('llm');
   const [planBusy, setPlanBusy] = useState(false);
   const [proposal, setProposal] = useState(null);
+  const [choice, setChoice] = useState({});
   const [undoBanner, setUndoBanner] = useState(() => readLastApply());
   const [aiReady, setAiReady] = useState(null);
   const [ownKey, setOwnKey] = useState(() => Boolean(getAIConfig().apiKey));
@@ -108,6 +109,7 @@ export default function AIHelper() {
         const resolved = resolveOps({ tasks, settings, ops: res.ops });
         ops = resolved.ops;
         setProposal({ text: res.text, ops: ops.filter((o) => o.status !== 'conflict'), conflicts: resolved.conflicts, status: 'pending' });
+        setChoice({});
       } else {
         setProposal(null);
       }
@@ -122,9 +124,26 @@ export default function AIHelper() {
     }
   };
 
+  /** Substitute the user's chosen alternative (if any) into the op list. */
+  const buildApplyOps = () => {
+    const out = [];
+    for (let i = 0; i < (proposal?.ops || []).length; i += 1) {
+      const op = proposal.ops[i];
+      const sel = choice[i];
+      if (sel && op.alternatives?.[sel - 1]) {
+        const alt = op.alternatives[sel - 1];
+        out.push({ ...op, ...alt, alternatives: undefined, status: 'ok', label: alt.label || op.label });
+        (alt.extraOps || []).forEach((x) => out.push(x));
+      } else {
+        out.push(op);
+      }
+    }
+    return out;
+  };
+
   const applyProposal = () => {
     if (!proposal || proposal.status !== 'pending') return;
-    const res = applyOps(proposal.ops);
+    const res = applyOps(buildApplyOps());
     const record = { at: Date.now(), before: res.before };
     try {
       localStorage.setItem(LAST_APPLY_KEY, JSON.stringify(record));
@@ -322,6 +341,8 @@ export default function AIHelper() {
           ) : proposal ? (
             <ProposalPanel
               proposal={proposal}
+              choice={choice}
+              onSelectChoice={(i, ndx) => setChoice((c) => ({ ...c, [i]: ndx }))}
               onApply={applyProposal}
               onCancel={cancelProposal}
               onUndo={doUndo}
@@ -538,7 +559,7 @@ const OP_COLOR = {
   deadline: 'text-sky-500',
 };
 
-function ProposalPanel({ proposal, onApply, onCancel, onUndo }) {
+function ProposalPanel({ proposal, onApply, onCancel, onUndo, choice = {}, onSelectChoice }) {
   const ops = proposal.ops || [];
   const applied = proposal.status === 'applied';
   return (
@@ -576,17 +597,45 @@ function ProposalPanel({ proposal, onApply, onCancel, onUndo }) {
           const opName = op.displayKind || op.op;
           const icon = OP_ICON[opName] || 'calendar';
           const color = OP_COLOR[opName] || 'text-brand';
+          const sel = choice[i] || 0;
+          const altList = op.alternatives || [];
           return (
-            <div key={`${op.op}${i}`} className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
-              <span className={`h-6 w-6 rounded-lg grid place-items-center shrink-0 ${color} bg-elevated`}>
-                <Icon name={icon} className="h-3.5 w-3.5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-ink">{op.label}</p>
-                {op.note && <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{op.note}</p>}
+            <div key={`${op.op}${i}`} className="rounded-xl border border-line bg-surface px-3 py-2.5">
+              <div className="flex items-start gap-3">
+                <span className={`h-6 w-6 rounded-lg grid place-items-center shrink-0 ${color} bg-elevated`}>
+                  <Icon name={icon} className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-ink">{op.label}</p>
+                  {op.note && <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{op.note}</p>}
+                </div>
+                {op.status === 'adjusted' && (
+                  <span className="chip bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">Adjusted</span>
+                )}
               </div>
-              {op.status === 'adjusted' && (
-                <span className="chip bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">Adjusted</span>
+
+              {!applied && altList.length > 0 && (
+                <div className="mt-2 ml-9 space-y-1.5">
+                  <p className="text-[11px] uppercase tracking-wide text-faint">Requested time is busy — pick one:</p>
+                  {[
+                    { label: op.label, note: op.note },
+                    ...altList.map((a) => ({ label: a.label, note: a.note })),
+                  ].map((opt, ai) => (
+                    <label key={ai} className={`flex items-start gap-2 text-sm cursor-pointer rounded-lg px-2 py-1.5 ${sel === ai ? 'bg-brand/5 ring-1 ring-brand/30' : ''}`}>
+                      <input
+                        type="radio"
+                        name={`alt-${i}`}
+                        checked={sel === ai}
+                        onChange={() => onSelectChoice(i, ai)}
+                        className="accent-brand mt-0.5"
+                      />
+                      <span className="min-w-0">
+                        <span className={`font-medium ${sel === ai ? 'text-brand' : 'text-ink'}`}>{opt.label}</span>
+                        {opt.note && <span className="block text-xs text-sub mt-0.5">{opt.note}</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
               )}
             </div>
           );

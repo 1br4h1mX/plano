@@ -114,35 +114,61 @@ export function busyForDate(tasks, settings, date, excludeTaskIds = []) {
  * Finds a concrete slot for a duration. `preferred` may be { start, end } —
  * the slot is honoured unless it overlaps; otherwise the earliest fitting free
  * window that day is used, working forwards through `DAY_LOOKAHEAD` days.
+ * When a deadline is given (`before`, an ISO date), later days are not used.
  * Returns { date, start, end } or null if nothing fits.
  */
-export function findSlot({ tasks, settings, durationMinutes, preferred = null, startDate = null, excludeTaskIds = [], windowDays = DAY_LOOKAHEAD }) {
+export function findSlot({ tasks, settings, durationMinutes, preferred = null, startDate = null, excludeTaskIds = [], windowDays = DAY_LOOKAHEAD, before = null }) {
   const duration = clampDuration(durationMinutes);
   const ws = toMin(settings?.workingHours?.start || '09:00');
   const we = toMin(settings?.workingHours?.end || '18:00');
   const start = startDate || todayReference();
 
-  const dateCandidates = preferred?.date
-    ? [preferred.date]
-    : Array.from({ length: windowDays }, (_, i) => addDays(start, i));
+  const deadline = before ? Math.max(before, start) : null;
+  const last = deadline || addDays(start, windowDays - 1);
+  const withinRange = (d) => d <= last;
+  const defaultDays = Array.from({ length: windowDays }, (_, i) => addDays(start, i)).filter(withinRange);
 
-  if (preferred?.date) {
+  let dateCandidates = preferred?.date
+    ? [preferred.date].filter(withinRange)
+    : defaultDays;
+  if (!dateCandidates.length) dateCandidates = defaultDays;
+  const candidatesFor = (arr) =>
+    arr
+      .map((date) => {
+        const busy = busyForDate(tasks, settings, date, excludeTaskIds);
+        for (const [s, e] of freeSlots(ws, we, busy)) {
+          if (e - s >= duration) return { date, start: fromMin(s), end: fromMin(s + duration) };
+        }
+        return null;
+      })
+      .find(Boolean);
+
+  // Exact requested window (time honoured unless it overlaps something).
+  if (preferred?.date && preferred.start !== undefined && preferred.end !== undefined) {
     const busy = busyForDate(tasks, settings, preferred.date, excludeTaskIds);
-    if (preferred.start !== undefined && preferred.end !== undefined) {
-      const ps = Math.max(toMin(preferred.start), ws);
-      const pe = Math.min(toMin(preferred.end), we);
-      const fits = pe - ps >= duration && !busy.some(([s, e]) => overlaps(ps, pe, s, e));
-      if (fits) return { date: preferred.date, start: fromMin(ps), end: fromMin(ps + duration) };
+    const ps = Math.max(toMin(preferred.start), ws);
+    const pe = Math.min(toMin(preferred.end), we);
+    const fits = pe - ps >= duration && !busy.some(([s, e]) => overlaps(ps, pe, s, e));
+    if (fits) return { date: preferred.date, start: fromMin(ps), end: fromMin(ps + duration) };
+
+    // Busy -> prefer the first gap at/after the requested start, same day.
+    const slots = freeSlots(ws, we, busy);
+    for (const [s, e] of slots) {
+      const st = Math.max(s, ps);
+      if (e - st >= duration) return { date: preferred.date, start: fromMin(st), end: fromMin(st + duration) };
     }
+    // Otherwise the best-fitting gap before the requested start, same day.
+    for (let i = slots.length - 1; i >= 0; i -= 1) {
+      const [s, e] = slots[i];
+      if (Math.min(e, pe) - s >= duration) return { date: preferred.date, start: fromMin(s), end: fromMin(s + duration) };
+    }
+
+    // Nothing that day -> try the following days (still subject to deadline).
+    const later = candidatesFor(defaultDays.filter((d) => d > preferred.date));
+    if (later) return later;
   }
 
-  for (const date of dateCandidates) {
-    const busy = busyForDate(tasks, settings, date, excludeTaskIds);
-    for (const [s, e] of freeSlots(ws, we, busy)) {
-      if (e - s >= duration) return { date, start: fromMin(s), end: fromMin(s + duration) };
-    }
-  }
-  return null;
+  return candidatesFor(dateCandidates);
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,6 +204,42 @@ const HOURS_LABELS = {
 const slotLabel = (date, start, end) =>
   `${dateLabel(date)}, ${hhmmTo12(start)} \u2013 ${hhmmTo12(end)}`;
 
+/** Earliest fitting window on a date whose start is >= cursorMin. */
+function slotAfter(tasks, settings, date, cursorMin, duration, exclude) {
+  const ws = toMin(settings?.workingHours?.start || '09:00');
+  const we = toMin(settings?.workingHours?.end || '18:00');
+  const busy = busyForDate(tasks, settings, date, exclude);
+  for (const [s, e] of freeSlots(ws, we, busy)) {
+    const st = Math.max(s, cursorMin);
+    if (e - st >= duration) return { start: fromMin(st), end: fromMin(st + duration) };
+  }
+  return null;
+}
+
+/** Last fitting window on a date that ends <= cursorMin. */
+function slotBefore(tasks, settings, date, cursorMin, duration, exclude) {
+  const ws = toMin(settings?.workingHours?.start || '09:00');
+  const we = toMin(settings?.workingHours?.end || '18:00');
+  const busy = busyForDate(tasks, settings, date, exclude);
+  const slots = freeSlots(ws, we, busy);
+  for (let i = slots.length - 1; i >= 0; i -= 1) {
+    const [s, e] = slots[i];
+    if (Math.min(e, cursorMin) - s >= duration) return { start: fromMin(s), end: fromMin(s + duration) };
+  }
+  return null;
+}
+
+/** Scheduled tasks overlapping a requested window on a given date. */
+function blockersOn(tasks, date, startMin, endMin, exclude) {
+  return (tasks || []).filter(
+    (t) =>
+      t.scheduledStart &&
+      String(t.scheduledStart).slice(0, 10) === date &&
+      !exclude.includes(t.id) &&
+      overlaps(startMin, endMin, toMin(t.scheduledStart.slice(11, 16)), toMin((t.scheduledEnd || t.scheduledStart).slice(11, 16))),
+  );
+}
+
 /** Turns raw ops into resolved ops (final times + labels + status notes). */
 export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD }) {
   const conflicts = [];
@@ -190,6 +252,11 @@ export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD })
     // -- schedule / create ------------------------------------------------
     if (op.op === 'schedule') {
       const existing = findTask(list, op.taskId, op.title);
+      if (op.taskId && !existing && !op.title) {
+        conflicts.push(`Could not find a task matching id "${op.taskId}".`);
+        resolved.push({ ...op, status: 'conflict', label: `Unknown task "${op.taskId}"`, taskId: op.taskId });
+        continue;
+      }
       const duration = clampDuration(op.durationMinutes || existing?.estimatedMinutes || 30);
       const wasScheduled = Boolean(existing?.scheduledStart);
       const preferred = op.date ? { date: op.date, start: op.start, end: op.end } : null;
@@ -201,6 +268,7 @@ export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD })
         preferred,
         excludeTaskIds: exclude,
         startDate: op.date || todayReference(),
+        before: op.deadline || op.before,
         windowDays,
       });
 
@@ -243,6 +311,77 @@ export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD })
         note = 'Found the first free slot.';
       }
 
+      // When a specific window was requested and it was busy, offer
+      // deterministic alternatives so the user can pick before applying.
+      let alternatives;
+      if (requested && status === 'adjusted' && op.date) {
+        const ws = toMin(settings?.workingHours?.start || '09:00');
+        const we = toMin(settings?.workingHours?.end || '18:00');
+        alternatives = [];
+        const later = slotAfter(list, settings, op.date, toMin(op.end), duration, exclude);
+        if (later && (later.start !== slot.start || later.end !== slot.end)) {
+          alternatives.push({
+            date: op.date,
+            start: later.start,
+            end: later.end,
+            status: 'adjusted',
+            label: `${hhmmTo12(later.start)} \u2013 ${hhmmTo12(later.end)} (same day, later)`,
+            note: 'A free gap later in the same working window.',
+          });
+        }
+        const earlier = slotBefore(list, settings, op.date, toMin(op.start), duration, exclude);
+        if (earlier && (earlier.start !== slot.start || earlier.end !== slot.end)) {
+          alternatives.push({
+            date: op.date,
+            start: earlier.start,
+            end: earlier.end,
+            status: 'adjusted',
+            label: `${hhmmTo12(earlier.start)} \u2013 ${hhmmTo12(earlier.end)} (same day, earlier)`,
+            note: 'A free gap earlier in the same working window.',
+          });
+        }
+        const bs = Math.max(toMin(op.start), ws);
+        const be = Math.min(toMin(op.end), we);
+        const blocker = blockersOn(list, op.date, bs, be, exclude)[0];
+        if (blocker) {
+          const bDur = clampDuration(blocker.estimatedMinutes || 30);
+          const bSlot = findSlot({
+            tasks: list,
+            settings,
+            durationMinutes: bDur,
+            startDate: op.date,
+            excludeTaskIds: [...exclude, blocker.id],
+            windowDays,
+          });
+          if (bSlot) {
+            alternatives.push({
+              keepRequest: true,
+              date: op.date,
+              start: op.start,
+              end: op.end,
+              status: 'ok',
+              label: `${hhmmTo12(op.start)} \u2013 ${hhmmTo12(op.end)} \u2022 move "${blocker.title}" instead`,
+              note: `Keep your requested time; "${blocker.title}" moves to a free slot${
+                bSlot.date === op.date ? ' elsewhere' : ` on ${dateLabel(bSlot.date)}`
+              }.`,
+              extraOps: [
+                {
+                  op: 'schedule',
+                  taskId: blocker.id,
+                  title: blocker.title,
+                  date: bSlot.date,
+                  start: bSlot.start,
+                  end: bSlot.end,
+                  durationMinutes: bDur,
+                  status: 'ok',
+                  label: `Move "${blocker.title}" \u2192 ${slotLabel(bSlot.date, bSlot.start, bSlot.end)}`,
+                },
+              ],
+            });
+          }
+        }
+      }
+
       resolved.push({
         ...op,
         taskId: existing?.id || null,
@@ -254,6 +393,7 @@ export function resolveOps({ tasks, settings, ops, windowDays = DAY_LOOKAHEAD })
         displayKind: became,
         status,
         note,
+        alternatives,
         label:
           became === 'create'
             ? `Add "${op.title}" \u2014 ${slotLabel(slot.date, slot.start, slot.end)}`

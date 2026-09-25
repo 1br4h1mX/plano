@@ -14,7 +14,7 @@
  */
 import { clientComplete, extractJson } from './llm.js';
 import { addDays, todayISO } from './dateUtils.js';
-import { findTask, clampDuration } from './operations.js';
+import { findTask, clampDuration, findSlot } from './operations.js';
 import { localChatReply } from './offlineAI.js';
 
 const OPS_SYSTEM_PROMPT = `You are "Plano", the AI planning copilot inside a productivity app. You can now ACT on the user's schedule, not just talk about it.
@@ -97,7 +97,7 @@ const OP_ALIASES = {
 
 const num = (v) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? undefined : Number(v));
 
-function normalizeOps(rawOps) {
+export function normalizeOps(rawOps) {
   if (!Array.isArray(rawOps)) return [];
   const out = [];
   for (const raw of rawOps || []) {
@@ -109,15 +109,16 @@ function normalizeOps(rawOps) {
     if (raw.taskId) clean.taskId = String(raw.taskId);
     if (raw.title) clean.title = String(raw.title).trim().slice(0, 120);
     if (raw.date && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.date))) clean.date = String(raw.date);
-    if (raw.start && /^\d{1,2}:\d{2}$/.test(String(raw.start))) clean.start = String(raw.start);
-    if (raw.end && /^\d{1,2}:\d{2}$/.test(String(raw.end))) clean.end = String(raw.end);
+    if (raw.start && /^(([01]?\d|2[0-3]):[0-5]\d)$/.test(String(raw.start))) clean.start = String(raw.start);
+    if (raw.end && /^(([01]?\d|2[0-3]):[0-5]\d)$/.test(String(raw.end))) clean.end = String(raw.end);
     const d = num(raw.durationMinutes);
     if (d) clean.durationMinutes = clampDuration(d);
     const p = num(raw.priority);
     if (p) clean.priority = Math.min(4, Math.max(1, Math.round(p)));
-    if (raw.deadline) clean.deadline = String(raw.deadline);
+    if (raw.deadline && /^\d{4}-\d{2}-\d{2}$/.test(String(raw.deadline))) clean.deadline = String(raw.deadline);
     if (raw.notes) clean.notes = String(raw.notes).slice(0, 300);
     if (raw.category) clean.category = String(raw.category).slice(0, 60);
+    if (clean.op === 'schedule' && !clean.taskId && !clean.title) continue; // a schedule must target something
     out.push(clean);
   }
   return out;
@@ -154,6 +155,17 @@ const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frida
 const WEEKDAYS_SHORT = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 const DAY_RE = /\b((?:next|this|last)\s+)?(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+
+const DEADLINE_RE = /\b(?:before|by|ahead\s+of)\s+((?:this|next|last)\s+)?(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|today|this\s+week|next\s+week|weekend)\b/i;
+
+/** Resolve a deadline phrase ("by friday", "before next week"…) to a date, or null. */
+function resolveDeadline(lower) {
+  const m = lower.match(DEADLINE_RE);
+  if (!m) return null;
+  const phrase = `${m[1] || ''}${m[2]}`;
+  const date = resolveDate(phrase) || (/\b(tomorrow)\b/.test(phrase) ? addDays(todayISO(), 1) : null);
+  return date;
+}
 
 const fullName = (name) => {
   const i = WEEKDAYS_SHORT.indexOf(name.toLowerCase());
@@ -225,6 +237,7 @@ function cleanTitle(src) {
   return String(src || '')
     .replace(removeLeader, ' ')
     .replace(DUR_RE, ' ')
+    .replace(DEADLINE_RE, ' ')
     .replace(/from\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:to|-)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi, ' ')
     .replace(/(?:at|@)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi, ' ')
     .replace(/\b(next|this|last)\s+(?:on\s+)?(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/gi, ' ')
@@ -237,7 +250,7 @@ function cleanTitle(src) {
     .replace(/["'.,!?]+$/g, '');
 }
 
-const removeLeader = /^(add|schedule|create|book|put|block|plan|set up|find time for|find|grab|make room for|could you|could|please|let's|lets)\s+/i;
+const removeLeader = /^(add|schedule|create|book|put|block|plan|set up|find time for|find|grab|make room for|give me|get me|make me|set|could you|could|please|let's|lets)\s+/i;
 
 function localContextText(query, { tasks, settings }) {
   const lines = [];
@@ -296,11 +309,19 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
   }
 
   // ---- delete -------------------------------------------------------
-  const del = lower.match(/\b(?:delete|remove|drop|cancel)\s+(?:the\s+)?["']?([^"']+?)["']?\s*$/);
-  if (del && !/\bremove\s+(?:the\s+)?[^"']+?\s+from\s+(?:the\s+)?calendar/.test(lower)) {
+  const del = lower.match(/\b(?:delete|drop)\s+(?:the\s+)?["']?([^"']+?)["']?\s*$/);
+  if (del) {
     const task = findTask(tasks, null, del[1]);
     if (task) ops.push({ op: 'delete', taskId: task.id });
     return ops.length ? text('Removed it.') : miss();
+  }
+
+  // ---- cancel -> unschedule (drop from calendar, keep the task) -----
+  const cancel = lower.match(/\b(?:cancel|skip)\s+(?:the\s+)?["']?([^"']+?)["']?\s*(?:for\s+)?(?:today|tomorrow|tonight|this|next|last)?\s*$/i);
+  if (cancel) {
+    const task = findTask(tasks, null, cancel[1]);
+    if (task?.scheduledStart) ops.push({ op: 'unschedule', taskId: task.id });
+    return ops.length ? text('Cancelled \u2014 removed it from the calendar, the task is still saved.') : miss();
   }
 
   // ---- unschedule (calendar only) -----------------------------------
@@ -309,6 +330,17 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
     const task = findTask(tasks, null, unsch[1]);
     if (task) ops.push({ op: 'unschedule', taskId: task.id });
     return ops.length ? text('Cleared it from the calendar \u2014 the task is still saved.') : miss();
+  }
+
+  // ---- next free slot ---------------------------------------------
+  const nfs = lower.match(/\b(?:move|reschedule|shift|schedule|put|find)\s+(?:the\s+)?["']?([^"']+?)["']?\s+(?:to|in|into)\s+(?:my\s+|the\s+|your\s+)?(?:next|first|earliest|nearest)\s+(?:free|open|available)\s+slot\b/);
+  if (nfs) {
+    const task = findTask(tasks, null, nfs[1]);
+    if (task?.scheduledStart || task) {
+      ops.push({ op: 'schedule', taskId: task.id });
+      return text('I\u2019ll put it in your next genuinely free slot.');
+    }
+    return miss();
   }
 
   // ---- move ---------------------------------------------------------
@@ -370,8 +402,59 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
     return miss();
   }
 
+  // ---- make <day> less busy ---------------------------------------
+  const lb = lower.match(/\b(?:make|keep|get)\s+(.+?)\s+less busy\b|\bless busy\s+(today|tomorrow|tonight|(?:this|next)\s+(?:mon|tue|wed|thu|fri|sat|sun)|(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?)/);
+  if (lb) {
+    const phrase = (lb[1] || lb[2] || '').trim();
+    const date = resolveDate(phrase) || (/\btomorrow\b/.test(phrase) ? addDays(todayISO(), 1) : null);
+    if (date) {
+      const dayTasks = (tasks || [])
+        .filter((t) => t.scheduledStart && !t.completed && String(t.scheduledStart).slice(0, 10) === date && (t.priority || 2) >= 3)
+        .sort((a, b) => (b.priority || 2) - (a.priority || 2) || (a.estimatedMinutes || 30) - (b.estimatedMinutes || 30));
+      const movable = dayTasks.slice(0, 2);
+      for (const t of movable) {
+        const slot = findSlot({
+          tasks,
+          settings,
+          durationMinutes: t.estimatedMinutes || 30,
+          startDate: addDays(date, 1),
+          excludeTaskIds: [t.id],
+          windowDays: 7,
+        });
+        if (slot) {
+          ops.push({ op: 'schedule', taskId: t.id, date: slot.date, start: slot.start, end: slot.end });
+        }
+      }
+      if (ops.length) {
+        return text(`Found a calmer plan for ${shortDateLabel(date)} \u2014 I\u2019ll move the least-important tasks to free slots.`);
+      }
+      return miss();
+    }
+  }
+
+  // ---- organize around a focus ------------------------------------
+  const org = lower.match(/\b(?:organi[sz]e|plan|arrange)\s+(?:my\s+|your\s+|the\s+)?(?:week|schedule|calendar|day)?\s*(?:around|based on)\s+(?:my\s+|your\s+|the\s+)?(.+)$/);
+  if (org) {
+    const topic = String(org[1]).replace(/["']/g, '').trim().toLowerCase();
+    const words = topic.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().split(/\s+/).filter((w) => w.length > 3);
+    const needles = [...new Set([...(words || []), ...(words || []).map((w) => (w.endsWith('s') ? w.slice(0, -1) : w))])];
+    const open = (tasks || []).filter((t) => !t.completed && !t.scheduledStart);
+    let matches = needles.length
+      ? open.filter((t) => (needles || []).some((n) => (t.title || '').toLowerCase().includes(n) || (t.notes || '').toLowerCase().includes(n)))
+      : [];
+    if (!matches.length) matches = open.filter((t) => t.deadline); // focus without a direct match -> anything with a deadline
+    matches
+      .sort((a, b) => (a.deadline || '9999').localeCompare(b.deadline || '9999'))
+      .slice(0, 3)
+      .forEach((t) => {
+        ops.push({ op: 'schedule', taskId: t.id, before: t.deadline, durationMinutes: clampDuration(t.estimatedMinutes || 30) });
+      });
+    if (ops.length) return text(`I\u2019ll fit those around your ${topic} before their deadlines.`);
+    return miss();
+  }
+
   // ---- create / schedule -------------------------------------------
-  const created = original.match(/\b(?:add|schedule|create|book|put|block|plan|set up|find time for|grab|make room for)\s+(?:a\s+|an\s+|the\s+)?(.+)$/i);
+  const created = original.match(/\b(?:add|schedule|create|book|put|block|plan|set up|find time for|grab|make room for|give me|get me|make me)\s+(?:a\s+|an\s+|the\s+)?(.+)$/i);
   if (created) {
     const day = resolveDate(lower);
     const fromTo = lower.match(/from\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+(?:to|-)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
@@ -381,12 +464,18 @@ export function offlineOps(query, { tasks = [], settings = {} }) {
     if (!title) return miss();
 
     const duration = extractDuration(lower);
+    const deadline = resolveDeadline(lower);
     const existing = findTask(tasks, null, title);
     const op = { op: 'schedule' };
     if (existing) op.taskId = existing.id;
     else op.title = title;
     if (duration) op.durationMinutes = duration;
     if (day) op.date = day;
+    if (deadline) {
+      op.deadline = deadline;
+      // A deadline with no explicit day means "fit it in *before* then".
+      if (!day) op.before = deadline;
+    }
     if (fromTo) {
       op.start = parseTime(fromTo[1]);
       op.end = parseTime(fromTo[2]);
