@@ -18,7 +18,7 @@ app.disable('x-powered-by');
 
 // Health + capability check (the client uses this to know whether real AI is available).
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, aiConfigured: Boolean(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) });
+  res.json({ ok: true, aiConfigured: Boolean(process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) });
 });
 
 app.use('/api/ai', aiRoutes);
@@ -40,7 +40,7 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`\n  Plano server running on http://localhost:${PORT}`);
-  console.log(`  AI configured: ${Boolean(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)}`);
+  console.log(`  AI configured: ${Boolean(process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY)}`);
   if (process.env.NODE_ENV !== 'production') {
     console.log('  Frontend (dev):  http://localhost:5173\n');
   }

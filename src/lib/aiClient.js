@@ -154,10 +154,13 @@ export const ai = {
 
   /**
    * Turns a natural-language request into schedule operations.
-   * Uses the user's own key when present, otherwise the built-in parser.
+   * Order: server LLM (key in env) -> user's own key -> built-in parser.
    * Returns { text, ops } — ops[] is empty when the user was just chatting.
    */
   async applyOps(input) {
+    const backend = await api.applyOps(input);
+    if (backend) return backend;
+
     const attempt = await withOwnKey(async (cfg) =>
       llmOps({
         query: input?.query,

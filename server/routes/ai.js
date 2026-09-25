@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { complete, extractJson, config } from '../llm.js';
 import { buildPlan, validateSchedule } from '../planner.js';
 import { SCHEDULE_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT } from '../prompts.js';
+import { OPS_SYSTEM_PROMPT, scheduleSnapshot, normalizeOps } from '../../src/lib/opsProtocol.js';
 
 const router = Router();
 
@@ -79,6 +80,28 @@ router.post('/chat', async (req, res, next) => {
     if (err.status === 503 || err.status === 500) {
       return res.json({ reply: 'I could not reach the AI provider right now — but here is a tip: protect one 90-minute block tomorrow for your single most important task. That alone will move your whole week forward.' });
     }
+    next(err);
+  }
+});
+
+// Turn a natural-language request into validated schedule operations.
+// The server only talks to the LLM and returns { text, ops }; the client's
+// deterministic operation layer still decides conflicts, slots and apply.
+router.post('/ops', async (req, res, next) => {
+  try {
+    const { query, tasks, settings } = req.body || {};
+    const cfg = config();
+    if (!cfg) return res.status(503).json({ error: 'No LLM configured on the server.' });
+
+    const user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${query || ''}`;
+    const raw = await complete({ system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 });
+    const parsed = extractJson(raw);
+    res.json({
+      text: typeof parsed?.text === 'string' ? parsed.text : '',
+      ops: normalizeOps(parsed?.ops),
+    });
+  } catch (err) {
+    if (err.status === 503 || err.status === 500) return res.status(503).json({ error: err.message });
     next(err);
   }
 });

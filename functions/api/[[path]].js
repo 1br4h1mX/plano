@@ -15,6 +15,7 @@ import {
   getData,
   setData,
 } from '../lib/store-d1.js';
+import { OPS_SYSTEM_PROMPT, scheduleSnapshot, normalizeOps } from '../../src/lib/opsProtocol.js';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -54,7 +55,28 @@ export async function onRequest(context) {
     const path = url.pathname;
 
     if (path === '/api/health' && request.method === 'GET') {
-      return json({ ok: true, aiConfigured: false, accounts: true });
+      return json({ ok: true, aiConfigured: Boolean(env.GEMINI_API_KEY || env.OPENAI_API_KEY), accounts: true });
+    }
+
+    if (path === '/api/ai/health' && request.method === 'GET') {
+      return json({ ok: true, aiConfigured: Boolean(env.GEMINI_API_KEY || env.OPENAI_API_KEY), clientSide: false });
+    }
+
+    if (path === '/api/ai/ops' && request.method === 'POST') {
+      const { query, tasks, settings } = await readBody(request);
+      const geminiKey = env.GEMINI_API_KEY;
+      const openaiKey = !geminiKey ? env.OPENAI_API_KEY : null;
+      if (!geminiKey && !openaiKey) return json({ error: 'No LLM configured.' }, 503);
+
+      const user = `SCHEDULE SNAPSHOT:\n${scheduleSnapshot({ tasks, settings })}\n\nUSER REQUEST: ${String(query || '')}`;
+      const raw = geminiKey
+        ? await callGemini(geminiKey, env.GEMINI_MODEL, { system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 })
+        : await callOpenAI(openaiKey, { system: OPS_SYSTEM_PROMPT, user, maxTokens: 1200 });
+      const parsed = extractOpsJson(raw);
+      return json({
+        text: typeof parsed?.text === 'string' ? parsed.text : '',
+        ops: normalizeOps(parsed?.ops),
+      });
     }
 
     if (path === '/api/auth/signup' && request.method === 'POST') {
@@ -104,5 +126,63 @@ export async function onRequest(context) {
     if (err instanceof HttpError) return json({ error: err.message }, err.status);
     console.error('[plano] error:', err);
     return json({ error: 'Internal server error.' }, 500);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* LLM passthrough (ops endpoint) — key comes from env only.           */
+/* ------------------------------------------------------------------ */
+
+async function callGemini(key, model, { system, user, maxTokens }) {
+  const m = model || 'gemini-2.5-flash';
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: 'user', parts: [{ text: user }] }],
+      generationConfig: { maxOutputTokens: maxTokens },
+    }),
+  });
+  if (!res.ok) throw new Error(`Gemini API ${res.status}: ${await safeText(res)}`);
+  const data = await res.json();
+  return (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('') || '';
+}
+
+async function callOpenAI(key, { system, user, maxTokens }) {
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: maxTokens,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`OpenAI API ${res.status}: ${await safeText(res)}`);
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+/** Robustly extract a JSON object from an LLM response (fences + prose allowed). */
+function extractOpsJson(text) {
+  if (!text) throw new Error('Empty response from LLM');
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const candidate = fenced ? fenced[1] : text;
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) throw new Error('LLM did not return valid JSON');
+  return JSON.parse(candidate.slice(start, end + 1));
+}
+
+async function safeText(res) {
+  try {
+    const t = await res.text();
+    return t.length > 300 ? `${t.slice(0, 300)}…` : t;
+  } catch {
+    return 'unknown error';
   }
 }

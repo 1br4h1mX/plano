@@ -83,6 +83,16 @@ export const api = {
     if (r.ok) return r.body;
     return { review: localReview(stats) };
   },
+
+  /** Ask the server's LLM for schedule operations. Returns null when no backend. */
+  applyOps: async (input) => {
+    const r = await tryRequest('/ai/ops', {
+      method: 'POST',
+      body: JSON.stringify({ query: input?.query, tasks: input?.tasks, settings: input?.settings }),
+    });
+    if (!r.ok) return null;
+    return { text: r.body?.text || '', ops: r.body?.ops || [] };
+  },
 };
 
 export { buildPlan };
