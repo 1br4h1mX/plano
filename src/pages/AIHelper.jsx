@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useApp } from '../hooks/useApp.js';
 import { ai } from '../lib/aiClient.js';
 import { getAIConfig, providerLabel } from '../lib/aiConfig.js';
-import { buildPlannerInput, contextLines } from '../lib/plannerInput.js';
+import { buildPlannerInput } from '../lib/plannerInput.js';
+import { resolveOps } from '../lib/operations.js';
 import { Icon } from '../components/ui/Icons.jsx';
 import Modal from '../components/ui/Modal.jsx';
 import { dateLabel, hhmmTo12, todayISO, shortLabel } from '../lib/dateUtils.js';
@@ -13,9 +14,26 @@ const WELCOME = [
   {
     role: 'assistant',
     content:
-      'Hi, I\u2019m Plano, your planning copilot. 👋\n\nTell me what\u2019s on your plate and I\u2019ll help you protect time for what matters. Want to start? Hit "Generate my perfect schedule" and I\u2019ll turn your tasks, goals, deadlines and energy profile into a balanced week you can drop straight onto the calendar.',
+      'Hi, I\u2019m Plano, your planning copilot. 👋\n\nTell me what\u2019s on your plate and I\u2019ll protect time for it. Ask me to add a task to your calendar (\u201cAdd 2 hours of Python this week\u201d), move or resize something, or hit "Generate my perfect schedule" for a balanced week.',
   },
 ];
+
+/* Undo survives page navigation (and reloads) via localStorage:
+   every applied proposal stores the exact tasks snapshot it started from. */
+const LAST_APPLY_KEY = 'plano:last-apply:v1';
+
+function readLastApply() {
+  try {
+    const raw = localStorage.getItem(LAST_APPLY_KEY);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || !Array.isArray(rec.before)) return null;
+    if (Date.now() - (rec.at || 0) > 24 * 3600 * 1000) return null;
+    return rec;
+  } catch {
+    return null;
+  }
+}
 
 const TYPE_STYLE = {
   task: 'border-brand bg-brand/5 text-ink',
@@ -43,13 +61,15 @@ const TYPE_LABEL = {
 };
 
 export default function AIHelper() {
-  const { tasks, goals, settings, stats, scheduleTask } = useApp();
+  const { tasks, goals, settings, stats, scheduleTask, applyOps, restoreTasks } = useApp();
   const [messages, setMessages] = useLocalStorage('plano:chat', WELCOME);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [plan, setPlan] = useState(null);
   const [planSource, setPlanSource] = useState('llm');
   const [planBusy, setPlanBusy] = useState(false);
+  const [proposal, setProposal] = useState(null);
+  const [undoBanner, setUndoBanner] = useState(() => readLastApply());
   const [aiReady, setAiReady] = useState(null);
   const [ownKey, setOwnKey] = useState(() => Boolean(getAIConfig().apiKey));
   const [ownKeyProvider, setOwnKeyProvider] = useState(() => getAIConfig().provider);
@@ -66,7 +86,7 @@ export default function AIHelper() {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: 99999, behavior: 'smooth' });
-  }, [messages, plan, review, busy, planBusy]);
+  }, [messages, plan, review, proposal, busy, planBusy]);
 
   const flash = (msg) => {
     setToast(msg);
@@ -82,12 +102,19 @@ export default function AIHelper() {
     setInput('');
     setBusy(true);
     try {
-      const ctx = contextLines({ tasks, goals, settings, stats });
-      const { reply } = await ai.chat(
-        next.map(({ role, content }) => ({ role, content })),
-        ctx,
-      );
-      setMessages((m) => [...m, { role: 'assistant', content: reply, ts: Date.now() }]);
+      const res = await ai.applyOps({ query: text, tasks, settings });
+      let ops = [];
+      if (res.ops?.length) {
+        const resolved = resolveOps({ tasks, settings, ops: res.ops });
+        ops = resolved.ops;
+        setProposal({ text: res.text, ops: ops.filter((o) => o.status !== 'conflict'), conflicts: resolved.conflicts, status: 'pending' });
+      } else {
+        setProposal(null);
+      }
+      setMessages((m) => [
+        ...m,
+        { role: 'assistant', content: res.text || (ops.length ? 'Here\u2019s what I propose.' : ''), ts: Date.now() },
+      ]);
     } catch (err) {
       setMessages((m) => [...m, { role: 'assistant', content: `Sorry — ${err.message}`, ts: Date.now() }]);
     } finally {
@@ -95,8 +122,42 @@ export default function AIHelper() {
     }
   };
 
+  const applyProposal = () => {
+    if (!proposal || proposal.status !== 'pending') return;
+    const res = applyOps(proposal.ops);
+    const record = { at: Date.now(), before: res.before };
+    try {
+      localStorage.setItem(LAST_APPLY_KEY, JSON.stringify(record));
+    } catch {
+      /* storage unavailable — undo will still work this session */
+    }
+    setUndoBanner(record);
+    setProposal({ ...proposal, status: 'applied', before: res.before });
+    flash(res.created > 0 ? `Added ${res.created} item(s) to your calendar.` : 'Applied to your calendar.');
+  };
+
+  const cancelProposal = () => {
+    setProposal(null);
+    flash('Proposal cancelled — nothing changed.');
+  };
+
+  const doUndo = () => {
+    const before = proposal?.before || undoBanner?.before;
+    if (!before) return;
+    restoreTasks(before);
+    try {
+      localStorage.removeItem(LAST_APPLY_KEY);
+    } catch {
+      /* ignore */
+    }
+    setUndoBanner(null);
+    setProposal(null);
+    flash('Undone — everything is back as it was.');
+  };
+
   const generate = async () => {
     setPlanBusy(true);
+    setProposal(null);
     try {
       const res = await ai.generateSchedule(buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
@@ -113,6 +174,7 @@ export default function AIHelper() {
   const doFixWeek = async () => {
     setFixDay(false);
     setPlanBusy(true);
+    setProposal(null);
     try {
       const res = await ai.reschedule(fixDate, buildPlannerInput({ tasks, goals, settings, days: 7 }));
       setPlan(res.plan);
@@ -201,6 +263,19 @@ export default function AIHelper() {
 
       <div className="grid lg:grid-cols-5 gap-4 items-start">
         {/* ---------------- Chat ---------------- */}
+        {undoBanner && proposal?.status !== 'applied' && (
+          <div className="lg:col-span-2 card !flex-row items-center justify-between gap-3 px-4 py-3 border-emerald-500/40 bg-emerald-500/5">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink">AI change applied</p>
+              <p className="text-xs text-sub truncate">
+                You can still revert the last change the assistant made to your calendar.
+              </p>
+            </div>
+            <button type="button" className="btn-outline btn-sm shrink-0" onClick={doUndo}>
+              <Icon name="undo" className="h-3.5 w-3.5" /> Undo
+            </button>
+          </div>
+        )}
         <section className="card lg:col-span-2 flex flex-col h-[520px] lg:sticky lg:top-20">
           <div ref={listRef} className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.map((m, i) => (
@@ -244,6 +319,13 @@ export default function AIHelper() {
                 <p className="text-sm text-sub mt-1">Prioritizing, balancing, protecting your energy.</p>
               </div>
             </section>
+          ) : proposal ? (
+            <ProposalPanel
+              proposal={proposal}
+              onApply={applyProposal}
+              onCancel={cancelProposal}
+              onUndo={doUndo}
+            />
           ) : plan ? (
             <SchedulePanel
               plan={plan}
@@ -415,17 +497,123 @@ function SchedulePanel({ plan, source, onApply, onRegenerate, hasTasks }) {
                         {hhmmTo12(b.start)} – {hhmmTo12(b.end)}
                       </span>
                       <span className="flex-1 min-w-0 text-sm font-medium text-ink truncate">{b.title}</span>
-                      <span className="chip bg-surface border border-line text-faint hidden sm:inline-flex">
-                        {TYPE_LABEL[b.type] || b.type}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+<span className="chip bg-surface border border-line text-faint hidden sm:inline-flex">
+                          {TYPE_LABEL[b.type] || b.type}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+const OP_ICON = {
+  create: 'plus',
+  schedule: 'calendar',
+  move: 'arrowR',
+  resize: 'refresh',
+  keep: 'calendar',
+  unschedule: 'close',
+  delete: 'trash',
+  complete: 'check',
+  priority: 'flag',
+  deadline: 'chart',
+};
+
+const OP_COLOR = {
+  create: 'text-brand',
+  schedule: 'text-brand',
+  move: 'text-violet-500',
+  resize: 'text-amber-500',
+  keep: 'text-slate-400',
+  unschedule: 'text-slate-400',
+  delete: 'text-rose-500',
+  complete: 'text-emerald-500',
+  priority: 'text-amber-500',
+  deadline: 'text-sky-500',
+};
+
+function ProposalPanel({ proposal, onApply, onCancel, onUndo }) {
+  const ops = proposal.ops || [];
+  const applied = proposal.status === 'applied';
+  return (
+    <section className="card overflow-hidden animate-fade-in">
+      <header className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-line bg-elevated/40">
+        <div className="flex items-center gap-2.5">
+          <span className={`h-8 w-8 rounded-xl grid place-items-center ${applied ? 'bg-emerald-500/10 text-emerald-500' : 'bg-brand/10 text-brand'}`}>
+            <Icon name={applied ? 'checkCircle' : 'sparkles'} className="h-4.5 w-4.5" />
+          </span>
+          <div>
+            <h2 className="font-bold text-ink">{applied ? 'Applied to your calendar' : 'Proposed changes'}</h2>
+            <p className="text-xs text-faint mt-0.5">
+              {applied ? 'Your calendar is updated. You can undo this anytime.' : `${ops.length} change(s) ready — review and confirm.`}
+            </p>
+          </div>
+        </div>
+        {applied && (
+          <button type="button" className="btn-outline btn-sm" onClick={onUndo}>
+            <Icon name="undo" className="h-3.5 w-3.5" /> Undo
+          </button>
+        )}
+      </header>
+
+      {proposal.text && !applied && (
+        <p className="px-5 pt-3 text-sm text-sub">{proposal.text}</p>
+      )}
+
+      <div className="px-5 py-3 space-y-2">
+        {ops.length === 0 && (
+          <p className="text-sm text-sub py-2">
+            Nothing to change — the assistant found no actionable request.
+          </p>
+        )}
+        {ops.map((op, i) => {
+          const opName = op.displayKind || op.op;
+          const icon = OP_ICON[opName] || 'calendar';
+          const color = OP_COLOR[opName] || 'text-brand';
+          return (
+            <div key={`${op.op}${i}`} className="flex items-start gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
+              <span className={`h-6 w-6 rounded-lg grid place-items-center shrink-0 ${color} bg-elevated`}>
+                <Icon name={icon} className="h-3.5 w-3.5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-ink">{op.label}</p>
+                {op.note && <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">{op.note}</p>}
+              </div>
+              {op.status === 'adjusted' && (
+                <span className="chip bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0">Adjusted</span>
               )}
             </div>
           );
         })}
       </div>
+
+      {proposal.conflicts?.length > 0 && (
+        <div className="mx-5 mb-3 rounded-xl border border-line bg-elevated px-3 py-2.5 space-y-1">
+          {proposal.conflicts.map((c, i) => (
+            <p key={i} className="text-xs text-sub flex gap-2">
+              <Icon name="close" className="h-3.5 w-3.5 text-rose-500 shrink-0 mt-0.5" />
+              {c}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {!applied && (
+        <footer className="px-5 py-4 border-t border-line flex items-center justify-end gap-2">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" onClick={onApply} disabled={!ops.length}>
+            <Icon name="check" className="h-4 w-4" /> Apply
+          </button>
+        </footer>
+      )}
     </section>
   );
 }

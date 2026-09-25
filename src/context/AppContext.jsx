@@ -9,6 +9,7 @@ import { createContext, useEffect, useMemo, useState, useCallback } from 'react'
 import { db } from '../lib/db.js';
 import { uid } from '../lib/ids.js';
 import { computeStats, goalProgress } from '../lib/stats.js';
+import { applyOpTasks } from '../lib/operations.js';
 import * as remote from '../lib/remote.js';
 
 const AppContext = createContext(null);
@@ -122,6 +123,22 @@ export function AppProvider({ children }) {
     }));
   }, []);
 
+  /**
+   * Applies AI schedule operations (resolved by operations.resolveOps) in one
+   * atomic snapshot. Returns { created, before } so the UI can offer Undo.
+   */
+  const applyOps = useCallback((resolvedOps) => {
+    const before = (data?.tasks || []).map((t) => ({ ...t }));
+    const after = applyOpTasks(before, resolvedOps);
+    setData((d) => ({ ...d, tasks: after.tasks }));
+    return { created: after.created, before };
+  }, [data]);
+
+  /** Restores an exact tasks snapshot (used by the AI proposal Undo). */
+  const restoreTasks = useCallback((before) => {
+    setData((d) => ({ ...d, tasks: (before || []).map((t) => ({ ...t })) }));
+  }, []);
+
   // ---- goal CRUD --------------------------------------------------------
   const addGoal = useCallback((partial) => {
     const goal = {
@@ -217,14 +234,14 @@ export function AppProvider({ children }) {
       sortedGoals,
       sessions: data?.sessions || [],
       stats,
-      addTask, updateTask, deleteTask, toggleTask, scheduleTask,
+      addTask, updateTask, deleteTask, toggleTask, scheduleTask, applyOps, restoreTasks,
       addGoal, updateGoal, deleteGoal,
       addMilestone, updateMilestone, deleteMilestone,
       addSession,
       updateSettings, setTheme, resetAll,
     };
   }, [data, ready, user, connectAccount, logout,
-    addTask, updateTask, deleteTask, toggleTask, scheduleTask,
+    addTask, updateTask, deleteTask, toggleTask, scheduleTask, applyOps, restoreTasks,
     addGoal, updateGoal, deleteGoal, addMilestone, updateMilestone, deleteMilestone,
     addSession, updateSettings, setTheme, resetAll]);
 

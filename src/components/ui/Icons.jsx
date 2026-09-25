@@ -233,6 +233,12 @@ const ICONS = {
       <path d="M3 6h18M3 12h18M3 18h18" />
     </S>
   ),
+  undo: (
+    <S>
+      <path d="M12 19a7 7 0 1 0-6.9-9L3 12.4l5 5L13 12l-2-2" />
+      <path d="M3 12l5-5" />
+    </S>
+  ),
 };
 
 export function Icon({ name, className, strokeWidth = 2 }) {

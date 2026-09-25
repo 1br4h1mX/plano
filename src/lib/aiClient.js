@@ -15,6 +15,7 @@ import { buildPlan, validateSchedule } from './planner.js';
 import { localChatReply, localReview } from './offlineAI.js';
 import { clientComplete, extractJson } from './llm.js';
 import { getAIConfig, aiConfigured } from './aiConfig.js';
+import { llmOps, offlineOps } from './aiActions.js';
 import { SCHEDULE_SYSTEM_PROMPT, CHAT_SYSTEM_PROMPT, REVIEW_SYSTEM_PROMPT } from '../../server/prompts.js';
 
 const summarizeInput = (input) => {
@@ -149,6 +150,28 @@ export const ai = {
     }
     if (attempt) return attempt;
     return api.weeklyReview(stats);
+  },
+
+  /**
+   * Turns a natural-language request into schedule operations.
+   * Uses the user's own key when present, otherwise the built-in parser.
+   * Returns { text, ops } — ops[] is empty when the user was just chatting.
+   */
+  async applyOps(input) {
+    const attempt = await withOwnKey(async (cfg) =>
+      llmOps({
+        query: input?.query,
+        tasks: input?.tasks,
+        settings: input?.settings,
+        provider: cfg.provider,
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+      }),
+    );
+
+    if (attempt?.owner === 'local') return offlineOps(input?.query, input);
+    if (attempt) return attempt;
+    return offlineOps(input?.query, input);
   },
 };
 
